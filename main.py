@@ -29,7 +29,7 @@ def _list(folder_id):
 
 def sync_drive_to_local(request):
     """The main function that syncs Drive to GCS."""
-    storage_client = storage.Client() [cite: 25]
+    storage_client = storage.Client()
     bucket = storage_client.bucket(BUCKET.lstrip("gs://"))
 
     # Load the manifest of previously synced files from the bucket 
