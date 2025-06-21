@@ -1,13 +1,13 @@
 steps:
-# Paso 0: Sincronizar documentos desde el bucket
+# Paso 0: Sincronizar documentos desde el bucket con el comando 'cp'
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   id: pull-docs
   entrypoint: bash
   args:
     - '-c'
     - |
-      # AÑADIDA BARRA AL FINAL DE 'docs/'
-      gsutil -m rsync -r gs://hr-bot-docs docs/
+      # Usamos 'cp' en lugar de 'rsync' para mayor robustez
+      gsutil -m cp -r gs://hr-bot-docs/* docs/
 
 # Paso 1: Construir el índice vectorial
 - name: 'python:3.11-slim'
