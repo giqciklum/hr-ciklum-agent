@@ -74,11 +74,33 @@ RAG_PROMPT_TEMPLATE = """
 
 # --- Arquitectura de la Cadena de IA (Simplificada y Robusta) ---
 chain = None
+# --- NUEVA SECCIÓN (DESPUÉS) ---
 try:
     # 1. Inicialización de los componentes de LangChain.
     llm = ChatOpenAI(model_name=MODEL_NAME, temperature=0.0, openai_api_base=BASE_URL, openai_api_key=API_KEY)
     embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL_NAME, openai_api_base=BASE_URL, openai_api_key=API_KEY)
+
+    # --- CÓDIGO DE DEPURACIÓN ---
+    logging.info(f"Buscando la base de datos en la ruta relativa: '{PERSIST_DIRECTORY}'")
+    abs_path = os.path.abspath(PERSIST_DIRECTORY)
+    logging.info(f"La ruta absoluta resuelta es: {abs_path}")
+    if os.path.exists(PERSIST_DIRECTORY):
+        logging.info(f"¡CONFIRMADO! La carpeta '{PERSIST_DIRECTORY}' SÍ EXISTE.")
+        try:
+            logging.info(f"Contenido de la carpeta: {os.listdir(PERSIST_DIRECTORY)}")
+        except Exception as e:
+            logging.error(f"No se pudo listar el contenido de la carpeta: {e}")
+    else:
+        logging.error(f"¡ERROR FATAL! La carpeta '{PERSIST_DIRECTORY}' NO SE ENCUENTRA en el contenedor.")
+    # --- FIN DEL CÓDIGO DE DEPURACIÓN ---
+
     vector_store = Chroma(persist_directory=PERSIST_DIRECTORY, embedding_function=embedder)
+    
+    # Comprobamos cuántos items hay en la base de datos cargada
+    item_count = vector_store._collection.count()
+    logging.info(f"✅ La base de datos se ha cargado con {item_count} documentos.")
+    if item_count == 0:
+        logging.warning("ADVERTENCIA: La base de datos se ha cargado pero está vacía.")
 
     # 2. El "Retriever" que busca los documentos relevantes. k=20 le da más contexto para encontrar respuestas.
     base_retriever = vector_store.as_retriever(search_kwargs={"k": 20})
