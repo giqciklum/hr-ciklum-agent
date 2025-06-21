@@ -1,19 +1,7 @@
-# build_index.py  ─── Versión 2025‑06‑17 (fast & resilient)
+# build_index.py  ─── Versión 2025‑06‑21 (Multiformato)
 """
 Reconstruye el índice vectorial de la base documental de Ciklum.
-Velocidad x10 sobre la versión anterior:
-
-1. **Detección de PDFs con texto** — usa PyMuPDF (fitz) para extraer texto
-   directamente; solo recurre a GPT‑4o visión cuando la página es escaneada.
-2. **Timeout inteligentes** — cada llamada de visión se aborta a los 90 s para
-   evitar cuelgues.  Si la página excede el timeout, se registra y se salta.
-3. **Progreso visible** — imprime una barra por documento y por página.
-4. **Procesamiento adaptable** — máximo 4 workers para no saturar CPU/memoria.
-5. **Metadatos enriquecidos** — conserva filas de tablas Markdown y añade
-   `doc_year`, `source`, `page/slide`, `row`.
-
-Requisitos extra:
-    pip install pymupdf tqdm
+Ahora soporta: PDF, PowerPoint, Word, Excel e Imágenes (PNG, JPG).
 """
 
 from __future__ import annotations
@@ -27,11 +15,14 @@ import base64
 import signal
 import fitz  # PyMuPDF
 import pptx
+import docx # Para Word
+import openpyxl # Para Excel
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from io import BytesIO
 from typing import List, Tuple
 
 from tqdm import tqdm
+from PIL import Image # Para imágenes
 from pdf2image import convert_from_path
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -181,6 +172,51 @@ def process_pptx(path: str) -> tuple[list[str], list[dict]]:
             add_chunk(row_text, {"source": basename, "slide": i, "doc_year": year, **row_meta}, texts, metas)
     return texts, metas
 
+# --- NUEVAS FUNCIONES ---
+
+def process_docx(path: str) -> tuple[list[str], list[dict]]:
+    """Extrae texto de un documento de Word (.docx)."""
+    texts, metas = [], []
+    basename = os.path.basename(path)
+    year = extract_year(basename)
+    doc = docx.Document(path)
+    full_text = "\n".join([para.text for para in doc.paragraphs])
+    if full_text:
+        add_chunk(full_text, {"source": basename, "doc_year": year}, texts, metas)
+    return texts, metas
+
+def process_xlsx(path: str) -> tuple[list[str], list[dict]]:
+    """Extrae texto de cada hoja de un fichero Excel (.xlsx)."""
+    texts, metas = [], []
+    basename = os.path.basename(path)
+    year = extract_year(basename)
+    workbook = openpyxl.load_workbook(path)
+    for sheetname in workbook.sheetnames:
+        sheet = workbook[sheetname]
+        sheet_text = "\n".join(
+            [",".join([str(cell.value) for cell in row if cell.value is not None]) for row in sheet.iter_rows()]
+        )
+        if sheet_text:
+            meta = {"source": basename, "sheet": sheetname, "doc_year": year}
+            add_chunk(sheet_text, meta, texts, metas)
+    return texts, metas
+
+def process_image(path: str) -> tuple[list[str], list[dict]]:
+    """Extrae texto de un fichero de imagen usando OCR (GPT-4o Vision)."""
+    texts, metas = [], []
+    basename = os.path.basename(path)
+    year = extract_year(basename)
+    try:
+        with open(path, "rb") as f:
+            img_bytes = f.read()
+        vision_text = vision_extract(img_bytes)
+        if vision_text:
+            add_chunk(vision_text, {"source": basename, "doc_year": year}, texts, metas)
+    except Exception as e:
+        print(f"⚠️  Error procesando imagen {basename}: {e}")
+    return texts, metas
+
+# -------------------------
 
 def process_file(path: str) -> tuple[list[str], list[dict]]:
     cache_f = os.path.join(CACHE_DIR, os.path.basename(path) + ".json")
@@ -189,12 +225,21 @@ def process_file(path: str) -> tuple[list[str], list[dict]]:
             cache = json.load(f)
         return cache["texts"], cache["metadatas"]
 
-    if path.lower().endswith(".pdf"):
+    # --- LÓGICA ACTUALIZADA ---
+    ext = path.lower().split('.')[-1]
+    if ext == "pdf":
         t, m = process_pdf(path)
-    elif path.lower().endswith(".pptx"):
+    elif ext == "pptx":
         t, m = process_pptx(path)
+    elif ext == "docx":
+        t, m = process_docx(path)
+    elif ext == "xlsx":
+        t, m = process_xlsx(path)
+    elif ext in ["png", "jpg", "jpeg"]:
+        t, m = process_image(path)
     else:
         t, m = [], []
+    # ---------------------------
 
     if t:
         with open(cache_f, "w", encoding="utf-8") as f:
@@ -204,11 +249,14 @@ def process_file(path: str) -> tuple[list[str], list[dict]]:
 
 # ── Main ───────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("── Construyendo índice vectorial (fast & resilient) ──")
+    print("── Construyendo índice vectorial (multiformato) ──")
     os.makedirs(CACHE_DIR, exist_ok=True)
 
-    files = [f for ext in ("*.pdf", "*.pptx") for f in glob.glob(os.path.join(DOCS_FOLDER, ext))]
+    # --- BÚSQUEDA DE FICHEROS ACTUALIZADA ---
+    extensions_to_process = ("*.pdf", "*.pptx", "*.docx", "*.xlsx", "*.png", "*.jpg", "*.jpeg")
+    files = [f for ext in extensions_to_process for f in glob.glob(os.path.join(DOCS_FOLDER, ext))]
     print(f"Se encontraron {len(files)} documentos. Procesando con {MAX_WORKERS} workers…")
+    # ----------------------------------------
 
     all_texts, all_metas = [], []
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as pool:
