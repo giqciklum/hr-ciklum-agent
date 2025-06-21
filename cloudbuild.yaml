@@ -31,10 +31,15 @@ steps:
     - '--platform=managed'
     - '--memory=1Gi'
     - '--allow-unauthenticated'
-    - '--set-env-vars=OPENAI_API_KEY=${_OPENAI_API_KEY},OPENAI_API_BASE=${_OPENAI_API_BASE}'
+    - '--set-env-vars=OPENAI_API_BASE=${_OPENAI_API_BASE}'
+    # Carga la API Key de forma segura desde Secret Manager
+    - '--set-secrets=OPENAI_API_KEY=hr-bot-openai-key:latest'
 
 substitutions:
-  # We will replace this with a secure secret in a later step
-  _OPENAI_API_KEY: 'mLW6B9XgCw_htaGRg4T9Zw'
+  # La API Key ya no se guarda aquí por seguridad
   _OPENAI_API_BASE: 'https://genai-gateway.azure-api.net/'
 timeout: '1200s'
+
+# Opción de logging añadida para solucionar el error de build
+options:
+  logging: CLOUD_LOGGING_ONLY
