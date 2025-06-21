@@ -1,0 +1,40 @@
+steps:
+# Step 0: Sync latest docs from the intermediary Cloud Storage bucket.
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: pull-docs
+  entrypoint: bash
+  args:
+    - '-c'
+    - |
+      gsutil -m rsync -r gs://hr-bot-docs docs
+
+# Step 1: (Re)build vector index from the newly synced docs.
+- name: 'python:3.11-slim'
+  id: build-index
+  entrypoint: bash
+  args: [ "-c", "pip install -r requirements.txt && python build_index.py" ]
+
+# Step 2: Build the container image.
+- name: 'gcr.io/cloud-builders/docker'
+  id: docker-build
+  args: ['build', '-t', 'gcr.io/$PROJECT_ID/hr-ciklum-agent', '.']
+
+# Step 3: Deploy the new image to Cloud Run.
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: run-deploy
+  args:
+    - 'run'
+    - 'deploy'
+    - 'hr-ciklum-agent'
+    - '--image=gcr.io/$PROJECT_ID/hr-ciklum-agent'
+    - '--region=europe-west1'
+    - '--platform=managed'
+    - '--memory=1Gi'
+    - '--allow-unauthenticated'
+    - '--set-env-vars=OPENAI_API_KEY=${_OPENAI_API_KEY},OPENAI_API_BASE=${_OPENAI_API_BASE}'
+
+substitutions:
+  # We will replace this with a secure secret in a later step
+  _OPENAI_API_KEY: 'mLW6B9XgCw_htaGRg4T9Zw'
+  _OPENAI_API_BASE: 'https://genai-gateway.azure-api.net/'
+timeout: '1200s'
