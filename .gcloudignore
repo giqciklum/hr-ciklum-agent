@@ -15,3 +15,6 @@
 
 node_modules
 #!include:.gitignore
+
+# EXCEPCIÓN PARA INCLUIR LA BASE DE DATOS EN EL BUILD
+!chroma_db
