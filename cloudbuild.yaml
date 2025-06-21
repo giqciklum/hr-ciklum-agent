@@ -6,7 +6,8 @@ steps:
   args:
     - '-c'
     - |
-      gsutil -m rsync -r gs://hr-bot-docs docs
+      # AÑADIDA BARRA AL FINAL DE 'docs/'
+      gsutil -m rsync -r gs://hr-bot-docs docs/
 
 # Paso 1: Construir el índice vectorial
 - name: 'python:3.11-slim'
