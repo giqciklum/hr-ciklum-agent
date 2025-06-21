@@ -27,7 +27,7 @@ from pdf2image import convert_from_path
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.schema.messages import HumanMessage, SystemMessage
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 # ── Configuración global ────────────────────────────────────────────────────
