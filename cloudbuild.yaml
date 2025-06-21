@@ -14,19 +14,6 @@ steps:
   entrypoint: bash
   args: [ "-c", "pip install -r requirements.txt && python build_index.py" ]
 
-# --- PASO DE DEPURACIÓN ---
-# Este paso nos mostrará todos los ficheros para ver si chroma_db existe
-- name: 'ubuntu'
-  id: debug-list-files
-  entrypoint: 'bash'
-  args:
-    - '-c'
-    - |
-      echo "--- Listando ficheros en el espacio de trabajo antes de construir Docker ---"
-      ls -laR
-      echo "---------------------------------------------------------------------"
-# -------------------------
-
 # Paso 2: Construir la imagen de Docker
 - name: 'gcr.io/cloud-builders/docker'
   id: docker-build
