@@ -1,19 +1,19 @@
 steps:
-# Paso 0: Sincronizar documentos desde el bucket con el comando 'cp'
+# Paso 0: Crear carpeta 'docs' y luego sincronizar desde el bucket
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   id: pull-docs
   entrypoint: bash
   args:
     - '-c'
     - |
-      # Usamos 'cp' en lugar de 'rsync' para mayor robustez
+      mkdir docs
       gsutil -m cp -r gs://hr-bot-docs/* docs/
 
 # Paso 1: Construir el índice vectorial
 - name: 'python:3.11-slim'
   id: build-index
   entrypoint: bash
-  args: [ "-c", "pip install -r requirements.txt && python build_index.py" ]
+  args: [ "-c", "apt-get update && apt-get install -y poppler-utils && pip install -r requirements.txt && python build_index.py" ]
 
 # Paso 2: Construir la imagen de Docker
 - name: 'gcr.io/cloud-builders/docker'
