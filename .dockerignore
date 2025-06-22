@@ -1,0 +1,21 @@
+# Ignorar el control de versiones de Git
+.git
+.gitignore
+
+# Ignorar el gcloudignore, solo es para el CLI de gcloud
+.gcloudignore
+
+# Ignorar ficheros de configuración de IDEs
+.idea/
+.vscode/
+
+# Ignorar cachés y entornos virtuales de Python
+__pycache__/
+*.pyc
+.cache/
+venv/
+*.env
+
+# IMPORTANTE: No ignores 'docs/' ni 'chroma_db/'.
+# 'docs/' es necesario para construir el índice.
+# 'chroma_db/' no debería existir en tu repo, pero por si acaso, no lo ignores aquí.
