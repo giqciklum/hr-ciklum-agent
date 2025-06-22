@@ -16,5 +16,6 @@
 node_modules
 #!include:.gitignore
 
-# EXCEPCIÓN PARA INCLUIR LA BASE DE DATOS EN EL BUILD
-!chroma_db
+# EXCEPCIÓN: No ignores la carpeta chroma_db para los comandos de gcloud.
+!chroma_db/
+!chroma_db/**
