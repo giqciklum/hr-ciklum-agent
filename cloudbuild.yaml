@@ -1,24 +1,27 @@
 steps:
-# Paso 1: Descargar los documentos que se usarán para construir el índice.
+# Paso 1: Sincronizar documentos desde el bucket al workspace.
+# La imagen de Docker los necesitará para construir el índice.
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   id: pull-docs
   entrypoint: bash
   args:
     - '-c'
     - |
+      # Creamos la carpeta 'docs' si no existe y copiamos el contenido.
       mkdir -p docs
       gsutil -m cp -r gs://hr-bot-docs/* docs/
 
-# Paso 2: Construir la imagen multi-etapa. Docker se encarga de todo lo demás.
+# Paso 2: Construir la imagen de Docker.
+# El Dockerfile ahora se encargará de todo: instalar dependencias Y crear el índice.
 - name: 'gcr.io/cloud-builders/docker'
   id: docker-build
   args: ['build', '-t', 'gcr.io/$PROJECT_ID/hr-ciklum-agent', '.']
 
-# Paso 3: Empujar la imagen a Google Container Registry.
+# Paso 3: Empujar la imagen construida a Google Container Registry.
 - name: 'gcr.io/cloud-builders/docker'
   args: ['push', 'gcr.io/$PROJECT_ID/hr-ciklum-agent']
 
-# Paso 4: Desplegar la imagen final a Cloud Run.
+# Paso 4: Desplegar la nueva imagen a Cloud Run.
 - name: 'gcr.io/cloud-builders/gcloud'
   id: run-deploy
   entrypoint: 'gcloud'
@@ -34,8 +37,12 @@ steps:
     - '--set-env-vars=OPENAI_API_BASE=${_OPENAI_API_BASE}'
     - '--set-secrets=OPENAI_API_KEY=hr-bot-openai-key:latest'
 
+# Variables de sustitución
 substitutions:
   _OPENAI_API_BASE: 'https://genai-gateway.azure-api.net/'
+
+# Aumentamos el tiempo de espera por si la construcción del índice tarda.
 timeout: '1800s'
+
 options:
   logging: CLOUD_LOGGING_ONLY
