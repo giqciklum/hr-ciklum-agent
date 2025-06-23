@@ -17,15 +17,19 @@ def _get_drive_service():
     return service
 
 def _list_drive_files(drive_service, folder_id):
-    """Lists all non-folder files in a given Drive folder."""
+    """Lists all non-folder files in a given Drive folder, including Shared Drives."""
     q = f"'{folder_id}' in parents and trashed = false"
     files = []
     page_token = None
     while True:
+        # These parameters are required to search within Shared Drives
         resp = drive_service.files().list(
             q=q,
             fields="nextPageToken, files(id, name, mimeType, modifiedTime)",
-            pageToken=page_token
+            pageToken=page_token,
+            corpora="allDrives",
+            includeItemsFromAllDrives=True,
+            supportsAllDrives=True
         ).execute()
         files.extend(resp.get("files", []))
         page_token = resp.get("nextPageToken")
