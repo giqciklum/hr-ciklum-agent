@@ -1,10 +1,10 @@
-# Web Framework & Environment
+#Web Framework & Environment
 flask
 gunicorn
 python-dotenv
 
-# LangChain & OpenAI Core
-langchain>=0.1.15
+#LangChain & OpenAI Core
+langchain
 langchain-core
 langchain-community
 langchain-openai
@@ -13,11 +13,11 @@ transformers
 sentencepiece
 tokenizers
 
-# Vector Store
+#Vector Store
 langchain-chroma
 chromadb
 
-# Document Processing
+#Document Processing
 PyMuPDF
 pdf2image
 Pillow
@@ -25,7 +25,7 @@ python-pptx
 python-docx
 openpyxl
 
-# Google Cloud & Utilities
+#Google Cloud & Utilities
 google-cloud-storage
 google-auth
 tqdm
