@@ -1,51 +1,30 @@
-# === Fase 1: El Constructor ===
-# En esta fase instalamos todo lo necesario para CONSTRUIR el índice.
-# Usamos una imagen completa de Python.
-FROM python:3.11-slim as builder
+# Dockerfile Definitivo y Robusto
 
-# Establecemos el directorio de trabajo
-WORKDIR /app
-
-# Actualizamos e instalamos Tesseract para el OCR de imágenes (si es necesario)
-# Si no usas OCR en imágenes, puedes comentar estas líneas para acelerar la construcción.
-# RUN apt-get update && apt-get install -y tesseract-ocr
-
-# Copiamos primero el fichero de requisitos para aprovechar el cache de Docker
-COPY requirements.txt .
-
-# Instalamos todas las dependencias de Python
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copiamos todo el código fuente de la aplicación
-COPY . .
-
-# --- ¡EL PASO CLAVE! ---
-# Ejecutamos el script que construye la base de datos vectorial.
-# Esta creará la carpeta 'chroma_db_v2' dentro de esta fase 'builder'.
-RUN python build_index.py
-
-
-# === Fase 2: El Final ===
-# Esta es la imagen final, limpia y ligera, que se desplegará en Cloud Run.
+# 1. Usar una imagen base de Python oficial.
 FROM python:3.11-slim
 
+# 2. Instalar dependencias del sistema operativo (necesarias para pdf2image).
+# Es más eficiente instalarlo en una sola capa RUN.
+RUN apt-get update && apt-get install -y poppler-utils --no-install-recommends && rm -rf /var/lib/apt/lists/*
+
+# 3. Establecer el directorio de trabajo.
 WORKDIR /app
 
-# Copiamos solo las dependencias de producción desde la fase 'builder'
-# Esto hace la imagen final mucho más pequeña.
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+# 4. Copiar PRIMERO el fichero de requisitos.
+# Esto aprovecha el caché de Docker. Si requirements.txt no cambia, no se volverán a instalar.
+COPY requirements.txt .
 
-# Copiamos el código fuente de la aplicación desde la fase 'builder'
-COPY --from=builder /app/app.py .
-COPY --from=builder /app/.env .
+# 5. Instalar las dependencias de Python.
+RUN pip install --no-cache-dir -r requirements.txt
 
-# --- ¡LA SOLUCIÓN! ---
-# Copiamos la base de datos vectorial YA CREADA desde la fase 'builder' a la imagen final.
-# Ahora el "cerebro" está en la caja.
-COPY --from=builder /app/chroma_db_v2 ./chroma_db_v2
+# 6. Copiar TODO el resto del código fuente y los documentos.
+# Esto incluye app.py, build_index.py y la carpeta 'docs' descargada en Cloud Build.
+COPY . .
 
-# Exponemos el puerto que usará Gunicorn
-EXPOSE 8080
+# 7. AHORA, EJECUTAR EL SCRIPT PARA CREAR LA BASE DE DATOS DENTRO DEL CONTENEDOR.
+# La carpeta 'chroma_db' se creará aquí, dentro de la imagen.
+RUN python build_index.py
 
-# El comando que ejecutará Cloud Run para iniciar la aplicación
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--timeout", "0", "app:app"]
+# 8. Configurar el entorno y el comando de inicio de la aplicación.
+ENV PYTHONUNBUFFERED=1
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "app:app"]
