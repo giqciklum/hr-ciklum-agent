@@ -6,18 +6,18 @@ python-dotenv
 # LangChain & OpenAI Core
 langchain
 langchain-core
-# langchain-community # Often a dependency of other langchain packages, can be removed if not used directly
 langchain-openai
 openai
-transformers  # <-- ADDED: Fixes the error, required for advanced text splitting
-sentencepiece # <-- ADDED: A key dependency for the transformers library
+transformers
+sentencepiece
+tokenizers      # <-- AÑADIR ESTA LÍNEA para mayor robustez
 
 # Vector Store
-langchain-chroma # Recommended way to install ChromaDB integration for LangChain
+langchain-chroma
 chromadb
 
 # Document Processing
-PyMuPDF          # <-- KEPT: This provides 'fitz' which your code uses for PDFs
+PyMuPDF
 pdf2image
 Pillow
 python-pptx

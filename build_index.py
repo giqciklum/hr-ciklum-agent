@@ -1,4 +1,4 @@
-# build_index_v2.py ─── Versión 2025-06-25 (Precisión, Eficiencia y Robustez)
+# build_index_v3.py ─── Versión 2025-06-25 (Corrección final del Tokenizer)
 """
 Reconstruye el índice vectorial de la base documental de Ciklum.
 Optimizado con chunks más pequeños, splitting jerárquico y deduplicación.
@@ -19,11 +19,15 @@ import docx
 import openpyxl
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from io import BytesIO
-from typing import List, Tuple, Dict
+from typing import List
 from tqdm import tqdm
 from PIL import Image
 from pdf2image import convert_from_path
 from dotenv import load_dotenv
+
+# === CORRECCIÓN 1: Importar AutoTokenizer ===
+from transformers import AutoTokenizer
+
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.schema.messages import HumanMessage, SystemMessage
 from langchain_chroma import Chroma
@@ -36,8 +40,8 @@ TEXT_MODEL = "gpt-4o"
 EMBEDDING_MODEL = "text-embedding-3-large"
 DOCS_FOLDER = "docs"
 CACHE_DIR = ".cache/doc_cache"
-PERSIST_DIR = "chroma_db_v2" # Guardar en un nuevo directorio para no sobreescribir el antiguo
-CHUNK_SIZE = 800  # Reducido para mayor precisión
+PERSIST_DIR = "chroma_db_v2" 
+CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
 MAX_WORKERS = min(os.cpu_count() or 4, 4)
 VISION_TIMEOUT = 90
@@ -49,26 +53,29 @@ vision_llm = ChatOpenAI(model=VISION_MODEL, openai_api_base=API_BASE, openai_api
 text_llm = ChatOpenAI(model=TEXT_MODEL, openai_api_base=API_BASE, openai_api_key=API_KEY, max_tokens=2048)
 embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL, openai_api_base=API_BASE, openai_api_key=API_KEY)
 
-# === MEJORA 1: SPLITTER JERÁRQUICO ===
-# Respeta la estructura del documento (títulos, listas) para chunks más coherentes.
+# === CORRECCIÓN 2: Crear el tokenizer PRIMERO y LUEGO pasarlo al splitter ===
+# 1. Cargamos el tokenizador que queremos usar desde Hugging Face.
+tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+
+# 2. Le pasamos el objeto 'tokenizer' ya creado al text_splitter.
 text_splitter = RecursiveCharacterTextSplitter.from_huggingface_tokenizer(
-    lambda tokenizer: tokenizer.from_pretrained("bert-base-uncased"), # Usar un tokenizador estándar
+    tokenizer,
     chunk_size=CHUNK_SIZE,
     chunk_overlap=CHUNK_OVERLAP,
-    separators=["\n\n", "\n", ". ", " ", ""], # Prioriza párrafos y frases
+    separators=["\n\n", "\n", ". ", " ", ""],
 )
 
 # ── Utilidades ─────────────────────────────────────────────────────────────
 YEAR_PAT = re.compile(r"(20\d{2})")
-# === MEJORA 2: Regex para limpiar boilerplate (pies de página, etc.) ===
 BOILERPLATE_PAT = re.compile(r"^(página \d+|\d+ \| © \d{4} ciklum|confidencial|documento interno).*$", re.IGNORECASE | re.MULTILINE)
 
+# ... (EL RESTO DEL FICHERO PERMANECE EXACTAMENTE IGUAL) ...
+# (Por brevedad, se omite el resto del código idéntico que ya tienes)
 def extract_year(filename: str) -> int | None:
     m = YEAR_PAT.search(filename)
     return int(m.group(1)) if m else None
 
 def generate_questions(chunk: str) -> str:
-    # Esta función es buena pero costosa. La mantenemos pero el cacheo es clave.
     try:
         resp = text_llm.invoke([
             SystemMessage(content="Genera 3 preguntas complejas que un empleado podría hacer y cuya respuesta esté en el siguiente fragmento de un documento interno. Sé conciso."),
@@ -79,35 +86,26 @@ def generate_questions(chunk: str) -> str:
         return ""
 
 def add_chunk(text_content: str, meta: dict, texts: list[str], metas: list[dict]):
-    """Divide el texto en chunks, los limpia, enriquece y añade a las listas."""
-    # Limpiar boilerplate antes de dividir
     cleaned_content = BOILERPLATE_PAT.sub("", text_content)
     if not cleaned_content.strip():
         return
 
     chunks = text_splitter.split_text(cleaned_content)
     for chunk in chunks:
-        # === MEJORA 3: ENRIQUECIMIENTO DE METADATOS ===
-        # Guardamos un "título" para cada chunk, útil para depuración y posibles citas futuras.
         enriched_meta = meta.copy()
         enriched_meta["chunk_title"] = " ".join(chunk.split()[:10]) + "..."
         
-        # El enriquecimiento con preguntas es potente. Lo mantenemos.
         enriched_chunk = f"PREGUNTAS HIPOTÉTICAS QUE ESTE TEXTO PODRÍA RESPONDER:\n{generate_questions(chunk)}\n---\nCONTENIDO DEL DOCUMENTO:\n{chunk}"
         texts.append(enriched_chunk)
         metas.append(enriched_meta)
 
-# ... (El resto de funciones de extracción: extract_text_from_pdf, vision_extract, etc. permanecen igual) ...
-# ... (Por brevedad, se omite el código idéntico) ...
 def extract_text_from_pdf(path: str) -> list[tuple[str, int]]:
-    """Devuelve lista de (texto, nº de página). Usa PyMuPDF; si la página está vacía ⇒ None."""
     results = []
     with fitz.open(path) as doc:
         for i, page in enumerate(doc, 1):
             text = page.get_text("text").strip()
             results.append((text, i))
     return results
-
 
 def vision_extract(img_bytes: bytes) -> str:
     def handler(signum, frame):
@@ -126,7 +124,6 @@ def vision_extract(img_bytes: bytes) -> str:
         return resp.content
     finally:
         signal.alarm(0)
-
 
 def process_pdf(path: str) -> tuple[list[str], list[dict]]:
     texts, metas = [], []
@@ -166,7 +163,6 @@ def process_pptx(path: str) -> tuple[list[str], list[dict]]:
             add_chunk(slide_text, {"source": basename, "slide": i, "doc_year": year, "doc_type": "PPTX"}, texts, metas)
     return texts, metas
 
-# ... (Las demás funciones process_* se actualizan para pasar el 'doc_type') ...
 def process_docx(path: str) -> tuple[list[str], list[dict]]:
     texts, metas = [], []
     basename = os.path.basename(path)
@@ -205,11 +201,7 @@ def process_image(path: str) -> tuple[list[str], list[dict]]:
         print(f"⚠️  Error procesando imagen {basename}: {e}")
     return texts, metas
 
-
 def process_file(path: str) -> tuple[list[str], list[dict]]:
-    """Procesa un fichero, usando un caché para evitar re-procesamiento."""
-    # === MEJORA 4: CACHEO MÁS INTELIGENTE ===
-    # El caché ahora incluye los hashes de las funciones de enriquecimiento para invalidarse si la lógica cambia.
     cache_f = os.path.join(CACHE_DIR, os.path.basename(path) + ".json")
     if os.path.exists(cache_f) and os.path.getmtime(cache_f) > os.path.getmtime(path):
         with open(cache_f, encoding="utf-8") as f:
@@ -235,7 +227,7 @@ def process_file(path: str) -> tuple[list[str], list[dict]]:
 
 
 if __name__ == "__main__":
-    print("── Construyendo índice vectorial v2 (Precisión Mejorada) ──")
+    print("── Construyendo índice vectorial v3 (Tokenizer Corregido) ──")
     os.makedirs(CACHE_DIR, exist_ok=True)
 
     extensions_to_process = ("*.pdf", "*.pptx", "*.docx", "*.xlsx", "*.png", "*.jpg", "*.jpeg")
@@ -254,8 +246,6 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"❌ Error procesando {fp}: {e}")
 
-    # === MEJORA 5: DEDUPLICACIÓN DE CHUNKS ===
-    # Elimina chunks idénticos antes de generar los embeddings, ahorrando coste y ruido.
     print(f"Se generaron {len(all_texts)} chunks en total. Deduplicando...")
     seen_hashes = set()
     unique_texts, unique_metas = [], []
@@ -279,6 +269,6 @@ if __name__ == "__main__":
             metadatas=unique_metas,
             persist_directory=PERSIST_DIR
         )
-        print(f"✅ Índice vectorial v2 creado con éxito en '{PERSIST_DIR}'.")
+        print(f"✅ Índice vectorial v3 creado con éxito en '{PERSIST_DIR}'.")
     else:
         print("❌ No se ha indexado ningún contenido. Por favor, revisa tus documentos y la configuración.")
