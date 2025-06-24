@@ -1,6 +1,6 @@
-# app.py (v16 - El Experto Meticuloso)
-# Objetivo: Eliminar la confusión entre conceptos relacionados mediante un prompt
-# ultra-preciso y un retriever más selectivo.
+# app.py (v17 - El Colega Experto)
+# Objetivo: Mantener la máxima precisión y fiabilidad, pero con un estilo
+# de conversación natural, cercano y servicial.
 
 import os
 import logging
@@ -8,7 +8,7 @@ from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from typing import List
 
-# --- Importaciones Clave (sin cambios) ---
+# --- Importaciones (sin cambios) ---
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.documents import Document
 from langchain_core.runnables import RunnablePassthrough
@@ -28,22 +28,25 @@ BASE_URL = os.getenv("OPENAI_API_BASE", "https://genai-gateway.azure-api.net/")
 PERSIST_DIRECTORY = "chroma_db"
 MODEL_NAME = "gpt-4o"
 EMBEDDING_MODEL_NAME = "text-embedding-3-large"
-chat_histories = {} # "Memoria" del Chatbot
+chat_histories = {}
 
 # --- Plantillas de Prompt: El Corazón del Asistente ---
 
 CONTEXTUALIZE_PROMPT_TEMPLATE = """Dada la siguiente conversación (chat_history) y la última pregunta del usuario (input), reformula la pregunta para que sea una pregunta independiente y clara que pueda entenderse sin el historial previo. No respondas a la pregunta, únicamente reformúlala."""
 
-# 2. Prompt Principal (v16 - El Experto Meticuloso)
-RAG_PROMPT_TEMPLATE_V4 = """
-**TU ROL:** Eres HRCiklum, el asistente de RRHH de IA para los empleados de Ciklum. Tu identidad es la de un compañero experto: eres la persona a la que todos acuden porque das respuestas fiables, prácticas y, sobre todo, precisas. Tu reputación se basa en tu meticulosidad.
+# 2. Prompt Principal (v17 - El Colega Experto)
+RAG_PROMPT_TEMPLATE_V5 = """
+**TU ROL:** Eres HRCiklum, el asistente de RRHH de IA para los empleados de Ciklum. Tu personalidad es la de un **"colega experto"**: eres cercano, amigable y siempre dispuesto a ayudar. La gente confía en ti no solo por la precisión de tus respuestas, sino por tu tono servicial y conversacional.
 
 **TUS PRINCIPIOS (INQUEBRANTABLES):**
-1.  **BASE EN LA EVIDENCIA:** Tus respuestas se basan **única y exclusivamente** en la información del CONTEXTO proporcionado. **NUNCA INVENTES NADA.**
-2.  **PRECISIÓN TERMINOLÓGICA (REGLA CRÍTICA):** Presta máxima atención a los nombres y términos específicos. **No confundas conceptos relacionados pero distintos.** Por ejemplo, 'formación en Prevención de Riesgos Laborales' es un curso online y es **diferente** de 'examen de salud' que es una cita médica. Si el usuario pregunta por el concepto A, responde **exactamente** sobre A, incluso si la información sobre un concepto B similar está en el mismo fragmento de contexto. Sé literal con los términos.
-3.  **INTERPRETA Y AYUDA:** Entiende la necesidad real del usuario. Si preguntan "¿quién me ayuda?", infiere el tema y busca el contacto o procedimiento correcto.
-4.  **RESPUESTAS PRÁCTICAS Y DIRECTAS:** Comunícate de forma natural. Estructura la información con listas o pasos a seguir para que sea fácil de entender y accionar.
-5.  **GESTIÓN DE LA INCERTIDUMBRE:** Si el contexto solo ofrece pistas, explica lo que has encontrado y guía al usuario. Solo si no hay nada en absoluto, escala a RRHH.
+1.  **ESTILO CONVERSACIONAL Y PRÁCTICO (REGLA CRÍTICA):** Cada una de tus respuestas debe sentirse como una conversación útil. Sigue esta estructura:
+    * **Apertura amigable:** Empieza con una frase corta y cercana que acuse recibo de la pregunta. (Ej: "¡Claro que sí! Te explico cómo va...", "Entendido, aquí tienes la información sobre...", "¡Buena pregunta! Te detallo los pasos:").
+    * **Cuerpo preciso:** Ofrece la información clave de forma clara y estructurada (listas, pasos, etc.). Esta parte debe ser 100% precisa y directa.
+    * **Cierre proactivo:** Termina siempre con una frase que invite a seguir ayudando. (Ej: "Espero que esto te sirva de ayuda. ¿Necesitas algo más sobre este tema?", "¿Te queda alguna duda?", "Si hay algo más en lo que pueda ayudarte, ¡aquí estoy!").
+2.  **PRECISIÓN TERMINOLÓGICA:** Presta máxima atención a los nombres y términos específicos. No confundas conceptos (ej: 'formación PRL' vs 'examen de salud'). Sé literal con los términos del contexto.
+3.  **BASE EN LA EVIDENCIA:** Basa tus respuestas **estrictamente** en el CONTEXTO. **NUNCA INVENTES NADA.**
+4.  **INTERPRETA Y AYUDA:** Entiende la necesidad real del usuario para dar la respuesta más útil.
+5.  **GESTIÓN DE LA INCERTIDUMBRE:** Si solo tienes pistas, explica lo que sabes y guía al usuario sobre los siguientes pasos. Solo si no hay nada relevante, escala a RRHH.
 
 **CONTEXTO (Información interna y verificada de Ciklum):**
 {context}
@@ -52,25 +55,19 @@ RAG_PROMPT_TEMPLATE_V4 = """
 **PREGUNTA DEL USUARIO (previamente analizada y contextualizada):**
 {input}
 
-**TU RESPUESTA (precisa, práctica y basada 100% en el contexto):**
+**TU RESPUESTA (siguiendo la estructura Conversacional de 3 pasos):**
 """
 
-# --- Arquitectura de la Cadena de IA ---
+# --- Arquitectura de la Cadena de IA (sin cambios en la lógica, solo en el prompt) ---
 chain = None
 try:
-    llm = ChatOpenAI(model_name=MODEL_NAME, temperature=0.0, openai_api_base=BASE_URL, openai_api_key=API_KEY)
+    llm = ChatOpenAI(model_name=MODEL_NAME, temperature=0.1, openai_api_base=BASE_URL, openai_api_key=API_KEY) # Ligero aumento de temperatura para más variedad en el lenguaje
     embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL_NAME, openai_api_base=BASE_URL, openai_api_key=API_KEY)
     vector_store = Chroma(persist_directory=PERSIST_DIRECTORY, embedding_function=embedder)
-
-    item_count = vector_store._collection.count()
-    logging.info(f"✅ La base de datos se ha cargado con {item_count} chunks.")
-    if item_count == 0:
-        logging.warning("ADVERTENCIA: La base de datos está vacía. Ejecuta build_index.py con la hiper-fragmentación.")
-
-    # *** CAMBIO: RETRIEVER MÁS SELECTIVO ***
-    # Reducimos k a 8 para ser más exigentes en la búsqueda inicial.
-    base_retriever = vector_store.as_retriever(search_kwargs={"k": 8})
     
+    logging.info(f"✅ La base de datos se ha cargado con {vector_store._collection.count()} chunks.")
+
+    base_retriever = vector_store.as_retriever(search_kwargs={"k": 8})
     document_compressor = LLMChainExtractor.from_llm(llm)
     contextual_compression_retriever = ContextualCompressionRetriever(
         base_compressor=document_compressor,
@@ -88,9 +85,9 @@ try:
     
     history_aware_retriever = create_history_aware_retriever(llm, contextual_compression_retriever, contextualize_q_prompt)
 
-    # *** CAMBIO: USAMOS EL NUEVO PROMPT "METICULOSO" V4 ***
+    # *** Usamos el nuevo prompt "El Colega Experto" V5 ***
     answer_generation_prompt = ChatPromptTemplate.from_messages([
-        ("system", RAG_PROMPT_TEMPLATE_V4),
+        ("system", RAG_PROMPT_TEMPLATE_V5),
         ("human", "{input}"),
     ])
 
@@ -106,7 +103,7 @@ try:
     
     final_chain = RunnablePassthrough.assign(answer=rag_chain)
     chain = final_chain
-    logging.info("✅ Arquitectura de IA Meticulosa (v16) inicializada correctamente.")
+    logging.info("✅ Arquitectura de IA 'Colega Experto' (v17) inicializada correctamente.")
 
 except Exception as e:
     logging.critical(f"❌ FATAL: La cadena RAG no pudo inicializarse: {e}", exc_info=True)
@@ -114,7 +111,7 @@ except Exception as e:
 
 # --- Aplicación Web Flask (sin cambios) ---
 app = Flask(__name__)
-
+# ... (El resto del código de Flask es exactamente el mismo que en la versión anterior)
 @app.route("/chat", methods=["POST"])
 def handle_chat_event():
     if not chain:
