@@ -87,8 +87,8 @@ try:
 
     # *** CAMBIO 1: RETRIEVER SIMPLIFICADO Y FIABLE ***
     # Usamos el retriever base directamente para eliminar la inconsistencia del MultiQueryRetriever.
-    # Mantenemos k=20 para asegurar que tenga suficiente contexto para responder.
-    base_retriever = vector_store.as_retriever(search_kwargs={"k": 20})
+    # Mantenemos k=15 para asegurar que tenga suficiente contexto para responder.
+    base_retriever = vector_store.as_retriever(search_kwargs={"k": 15})
 
     def format_docs(docs: List[Document]) -> str:
         return "\n\n".join(doc.page_content for doc in docs)
