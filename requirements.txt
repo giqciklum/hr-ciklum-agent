@@ -1,33 +1,30 @@
-#Web Framework & Environment
-flask           # Web framework
-gunicorn        # Production server
-python-dotenv   # Environment variables
+# Web Framework & Environment
+flask
+gunicorn
+python-dotenv
 
-#LangChain & OpenAI Core
+# LangChain & OpenAI Core
+langchain
+langchain-core
+# langchain-community # Often a dependency of other langchain packages, can be removed if not used directly
+langchain-openai
+openai
+transformers  # <-- ADDED: Fixes the error, required for advanced text splitting
+sentencepiece # <-- ADDED: A key dependency for the transformers library
 
-langchain              # Main LangChain library
-langchain-core         # Core LangChain components
-langchain-community    # Community integrations (3rd-party tools)
-langchain-openai       # OpenAI integrations for LangChain
-openai                 # Official OpenAI SDK
+# Vector Store
+langchain-chroma # Recommended way to install ChromaDB integration for LangChain
+chromadb
 
+# Document Processing
+PyMuPDF          # <-- KEPT: This provides 'fitz' which your code uses for PDFs
+pdf2image
+Pillow
+python-pptx
+python-docx
+openpyxl
 
-#Vector Store
-chromadb         # Embeddings storage & retrieval
-
-
-#Document Processing
-pypdf            # PDF text extraction
-pdf2image        # Convert PDFs to images (for scanned PDFs)
-Pillow           # Image manipulation
-python-pptx      # PowerPoint files
-python-docx      # Word files
-openpyxl         # Excel files
-pytesseract      # OCR (requires system-level Tesseract)
-
-google-api-python-client
+# Google Cloud & Utilities
 google-cloud-storage
 google-auth
-PyMuPDF
 tqdm
-langchain-chroma
