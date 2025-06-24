@@ -1,9 +1,8 @@
-# build_index.py  ─── Versión 2025-06-22 (Extracción Exhaustiva Multimodal)
+# build_index.py  ─── Versión 2025-06-24 (Corrección de Despliegue)
 """
 Reconstruye el índice vectorial utilizando una técnica de extracción multimodal y semántica.
-Para cada documento, un LLM avanzado analiza su contenido visual y textual para generar
-una base de conocimiento en formato Q&A extremadamente detallada y precisa.
-Este enfoque asegura la captura de tablas, diagramas y datos contextuales.
+Esta versión corrige un error en la búsqueda recursiva de ficheros que impedía
+el despliegue en Cloud Build.
 """
 
 from __future__ import annotations
@@ -208,9 +207,18 @@ if __name__ == "__main__":
     print("── Construyendo índice con Extracción Semántica Exhaustiva (Multimodal) ──")
     os.makedirs(CACHE_DIR, exist_ok=True)
 
+    # --- BÚSQUEDA DE FICHEROS CORREGIDA ---
+    # Se reemplaza la list comprehension con un bucle para mayor claridad y
+    # para asegurar que glob.glob reciba los argumentos correctamente.
     extensions_to_process = ("*.pdf", "*.pptx", "*.docx", "*.xlsx", "*.png", "*.jpg", "*.jpeg")
-    files = [f for ext in extensions_to_process for f in glob.glob(os.path.join(DOCS_FOLDER, f"**/{ext}", recursive=True))]
+    files = []
+    for ext in extensions_to_process:
+        # El patrón '**' busca en el directorio actual y todos los subdirectorios.
+        pathname = os.path.join(DOCS_FOLDER, "**", ext)
+        files.extend(glob.glob(pathname, recursive=True))
+    
     print(f"Se encontraron {len(files)} documentos. Procesando con {MAX_WORKERS} workers…")
+    # ----------------------------------------
     
     all_texts, all_metas = [], []
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as pool:
@@ -234,4 +242,3 @@ if __name__ == "__main__":
         print("✅ ¡Índice vectorial creado con éxito!")
     else:
         print("❌ ADVERTENCIA: No se generó contenido para indexar. Revisa los documentos y los logs.")
-
