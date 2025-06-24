@@ -1,4 +1,4 @@
-# build_index.py (Versión v20 - Alta Calidad con Visión y Semántica)
+# build_index.py (Versión v21 - Calidad Equilibrada y Eficiente)
 from __future__ import annotations
 import os
 import re
@@ -33,8 +33,7 @@ VISION_MODEL = "gpt-4o"
 TEXT_MODEL = "gpt-4o"
 EMBEDDING_MODEL = "text-embedding-3-large"
 DOCS_FOLDER = "docs"
-CACHE_DIR = ".cache/doc_cache_v20"
-PERSIST_DIR = "chroma_db_v20" # Nuevo directorio para la nueva base de datos
+PERSIST_DIR = "chroma_db_v21" # Directorio para la nueva BBDD balanceada
 VISION_TIMEOUT = 120
 MAX_WORKERS = min(os.cpu_count() or 4, 4)
 API_BASE = os.getenv("OPENAI_API_BASE", "https://genai-gateway.azure-api.net/")
@@ -44,13 +43,10 @@ API_KEY = os.getenv("OPENAI_API_KEY")
 vision_llm = ChatOpenAI(model=VISION_MODEL, openai_api_base=API_BASE, openai_api_key=API_KEY, max_tokens=4096, request_timeout=VISION_TIMEOUT)
 text_llm = ChatOpenAI(model=TEXT_MODEL, openai_api_base=API_BASE, openai_api_key=API_KEY, max_tokens=2048)
 embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL, openai_api_base=API_BASE, openai_api_key=API_KEY, chunk_size=500)
-
-# Usando Semantic Chunker para chunks más coherentes
 text_splitter = SemanticChunker(embedder, breakpoint_threshold_type="percentile")
 
 # --- Utilidades ---
 def vision_extract(img_bytes: bytes) -> str:
-    """Usa GPT-4o para extraer texto y tablas de una imagen como Markdown."""
     def handler(signum, frame): raise TimeoutError("La extracción de visión superó el tiempo límite.")
     signal.signal(signal.SIGALRM, handler)
     signal.alarm(VISION_TIMEOUT)
@@ -71,24 +67,33 @@ def vision_extract(img_bytes: bytes) -> str:
         signal.alarm(0)
 
 def extract_document_title(basename: str) -> str:
-    """Crea un título limpio a partir de un nombre de fichero."""
     title = os.path.splitext(basename)[0]
     title = re.sub(r'[\W_]+', ' ', title)
     title = re.sub(r'\s+', ' ', title).strip()
     return title.title()
 
 def add_documents_to_vectorstore(docs: List[Document], vector_store: Chroma):
-    """Añade documentos a la base de datos vectorial en lotes."""
     if not docs:
         return
     texts = [doc.page_content for doc in docs]
     metadatas = [doc.metadata for doc in docs]
     vector_store.add_texts(texts=texts, metadatas=metadatas)
 
-# --- Procesadores de Ficheros (Mejorados) ---
+# --- NUEVA FUNCIÓN DE AYUDA para el enfoque Híbrido ---
+def has_complex_layout(text: str, line_threshold: int = 10, short_line_chars: int = 50) -> bool:
+    """Detecta si un texto parece tener un layout complejo (ej. tablas, listas)."""
+    lines = text.splitlines()
+    if not lines:
+        return False
+    # Heurística: si tiene muchas líneas y la longitud media de línea es corta, probablemente es complejo.
+    avg_line_len = sum(len(line) for line in lines) / len(lines)
+    return len(lines) > line_threshold and avg_line_len < short_line_chars
+
+
+# --- Procesadores de Ficheros (Mejorados con Enfoque Híbrido) ---
 
 def process_pdf(path: str) -> List[Document]:
-    """Procesa cada página de un PDF usando el modelo de visión para máxima calidad."""
+    """Procesa PDFs con un enfoque HÍBRIDO: rápido para texto simple, visión para páginas complejas."""
     basename = os.path.basename(path)
     doc_title = extract_document_title(basename)
     documents = []
@@ -97,23 +102,32 @@ def process_pdf(path: str) -> List[Document]:
         doc = fitz.open(path)
         for i, page in enumerate(tqdm(doc, desc=f"PDF: {basename}", leave=False), 1):
             meta = {"source": basename, "page": i, "title": doc_title}
-            try:
-                pix = page.get_pixmap(dpi=200)
-                img_bytes = pix.tobytes("png")
-                # Siempre usar visión en PDFs para capturar tablas y layouts correctamente
-                vision_text = vision_extract(img_bytes)
-                if vision_text:
-                    # El contenido del chunk ahora incluye un título para dar contexto
-                    content_with_header = f"# Documento: {doc_title}\n## Página: {i}\n\n{vision_text}"
-                    documents.append(Document(page_content=content_with_header, metadata=meta))
-            except Exception as e:
-                logging.warning(f"Error procesando página {i} de '{basename}' con OCR: {e}")
+            
+            # 1. Intenta la extracción de texto rápida
+            page_text = page.get_text("text").strip()
+
+            # 2. Decide si usar el modelo de visión
+            # Condición: La página no tiene texto O parece tener un layout complejo (como una tabla)
+            if not page_text or has_complex_layout(page_text):
+                logging.info(f"Página {i} de '{basename}' es compleja/imagen. Usando OCR de visión.")
+                try:
+                    pix = page.get_pixmap(dpi=200)
+                    img_bytes = pix.tobytes("png")
+                    vision_text = vision_extract(img_bytes)
+                    if vision_text:
+                        content_with_header = f"# Documento: {doc_title}\n## Página: {i}\n\n{vision_text}"
+                        documents.append(Document(page_content=content_with_header, metadata=meta))
+                except Exception as e:
+                    logging.warning(f"Error procesando página {i} de '{basename}' con OCR: {e}")
+            else:
+                # 3. Si es texto simple, úsalo directamente
+                content_with_header = f"# Documento: {doc_title}\n## Página: {i}\n\n{page_text}"
+                documents.append(Document(page_content=content_with_header, metadata=meta))
     except Exception as e:
         logging.error(f"Error crítico procesando PDF '{basename}': {e}")
     return documents
 
 def process_generic(path: str, extractor: callable) -> List[Document]:
-    """Procesador genérico para DOCX, PPTX, etc."""
     basename = os.path.basename(path)
     doc_title = extract_document_title(basename)
     documents = []
@@ -143,12 +157,10 @@ def pptx_extractor(path: str) -> str:
         for shape in slide.shapes:
             if hasattr(shape, "text") and shape.text.strip():
                 parts.append(shape.text)
-            # Aquí se podría añadir también extracción por visión de las imágenes de las slides
     return "\n".join(parts)
 
 
 def process_file(path: str) -> List[Document]:
-    logging.info(f"Procesando fichero: {os.path.basename(path)}")
     ext = path.lower().split('.')[-1]
     
     processor_map = {
@@ -165,39 +177,33 @@ def process_file(path: str) -> List[Document]:
 
 
 if __name__ == "__main__":
-    print(f"── Construyendo índice vectorial v20 (Calidad Alta) en '{PERSIST_DIR}' ──")
+    print(f"── Construyendo índice vectorial v21 (Calidad Equilibrada) en '{PERSIST_DIR}' ──")
     if os.path.exists(PERSIST_DIR):
         print(f"Borrando el directorio de índice antiguo: {PERSIST_DIR}")
         shutil.rmtree(PERSIST_DIR)
     
     os.makedirs(PERSIST_DIR, exist_ok=True)
-    
-    # Inicializar la base de datos vacía
     db = Chroma(persist_directory=PERSIST_DIR, embedding_function=embedder)
-
+    
     extensions = ("*.pdf", "*.pptx", "*.docx")
     files = [f for ext in extensions for f in glob.glob(os.path.join(DOCS_FOLDER, f"**/{ext}"), recursive=True)]
     
-    print(f"Se encontraron {len(files)} documentos. Procesando y dividiendo en chunks semánticos...")
+    print(f"Se encontraron {len(files)} documentos. Procesando con enfoque híbrido...")
 
     total_chunks = 0
-    for file_path in tqdm(files, desc="Procesando Ficheros"):
-        # 1. Extraer el contenido del fichero en Documentos de LangChain (sin chunking aún)
-        raw_documents = process_file(file_path)
-        if not raw_documents:
-            continue
-
-        # 2. Dividir los documentos extraídos en chunks semánticos
-        chunks = text_splitter.split_documents(raw_documents)
-        
-        # 3. Añadir los chunks a la base de datos
-        if chunks:
-            add_documents_to_vectorstore(chunks, db)
-            total_chunks += len(chunks)
+    with ProcessPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        futs = {pool.submit(process_file, fp): fp for fp in files}
+        for fut in tqdm(as_completed(futs), total=len(futs), desc="Procesando Ficheros"):
+            try:
+                raw_documents = fut.result()
+                if raw_documents:
+                    chunks = text_splitter.split_documents(raw_documents)
+                    add_documents_to_vectorstore(chunks, db)
+                    total_chunks += len(chunks)
+            except Exception as e:
+                logging.error(f"❌ Error crítico en el futuro del fichero {futs[fut]}: {e}", exc_info=True)
 
     print(f"\nSe generaron e indexaron un total de {total_chunks} chunks semánticos.")
     print(f"✅ Índice vectorial creado con éxito en '{PERSIST_DIR}'.")
-    
-    # Es crucial persistir los cambios al final
     db.persist()
     print("Base de datos guardada en disco.")
