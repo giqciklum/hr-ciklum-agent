@@ -1,7 +1,9 @@
-# build_index.py  ─── Versión 2025‑06‑21 (Multiformato)
+# build_index.py  ─── Versión 2025-06-21 (Extracción Semántica Avanzada)
 """
-Reconstruye el índice vectorial de la base documental de Ciklum.
-Ahora soporta: PDF, PowerPoint, Word, Excel e Imágenes (PNG, JPG).
+Reconstruye el índice vectorial utilizando una técnica de extracción semántica.
+En lugar de indexar texto plano, un LLM analiza cada documento y lo convierte
+en un conjunto detallado de Preguntas y Respuestas (Q&A) para crear una base de
+conocimiento más rica y contextual.
 """
 
 from __future__ import annotations
@@ -11,19 +13,16 @@ import re
 import glob
 import json
 import shutil
-import base64
-import signal
 import fitz  # PyMuPDF
 import pptx
 import docx # Para Word
 import openpyxl # Para Excel
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from io import BytesIO
-from typing import List, Tuple
+from typing import List
 
 from tqdm import tqdm
-from PIL import Image # Para imágenes
-from pdf2image import convert_from_path
+from PIL import Image
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.schema.messages import HumanMessage, SystemMessage
@@ -32,240 +31,188 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 # ── Configuración global ────────────────────────────────────────────────────
 load_dotenv()
-VISION_MODEL = "gpt-4o"
-TEXT_MODEL = "gpt-4o"
+QA_GENERATION_MODEL = "gpt-4o"
+EMBEDDING_MODEL = "text-embedding-3-large"
 DOCS_FOLDER = "docs"
 CACHE_DIR = ".cache/doc_cache"
 PERSIST_DIR = "chroma_db"
-CHUNK_SIZE = 4096
-CHUNK_OVERLAP = 200
+CHUNK_SIZE = 2048  # Ajustado para Q&A
+CHUNK_OVERLAP = 100
 MAX_WORKERS = min(os.cpu_count() or 4, 4)
-VISION_TIMEOUT = 90  # segundos por página
 
 API_BASE = "https://genai-gateway.azure-api.net/"
 API_KEY = os.getenv("OPENAI_API_KEY")
 
 # ── Modelos ────────────────────────────────────────────────────────────────
-vision_llm = ChatOpenAI(model=VISION_MODEL, openai_api_base=API_BASE, openai_api_key=API_KEY, max_tokens=4096)
-text_llm = ChatOpenAI(model=TEXT_MODEL, openai_api_base=API_BASE, openai_api_key=API_KEY, max_tokens=2048)
-embedder = OpenAIEmbeddings(model="text-embedding-3-large", openai_api_base=API_BASE, openai_api_key=API_KEY)
+qa_llm = ChatOpenAI(model=QA_GENERATION_MODEL, openai_api_base=API_BASE, openai_api_key=API_KEY, max_tokens=4096, temperature=0.1)
+embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL, openai_api_base=API_BASE, openai_api_key=API_KEY)
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
 
+# ── Plantilla de Prompt para la Extracción Semántica ────────────────────────
+QA_SYSTEM_PROMPT = """
+Eres un experto en gestión del conocimiento corporativo. Tu misión es leer el siguiente documento y transformarlo en un formato de Preguntas y Respuestas (Q&A) muy completo.
+El objetivo es crear una base de conocimiento que un asistente de IA utilizará para responder a las preguntas de los empleados.
+
+**Instrucciones:**
+1.  **Analiza el Contenido:** Lee el texto completo del documento que te proporcionaré.
+2.  **Identifica Conceptos Clave:** Extrae cada política, procedimiento, regla, beneficio, contacto, fecha límite, y cualquier otro dato importante.
+3.  **Genera Pares de Q&A:** Para cada concepto clave, formula una pregunta clara y específica que un empleado podría hacer, y proporciona una respuesta detallada y completa basada únicamente en la información del texto.
+4.  **Formato de Salida:** Presenta el resultado como una lista de preguntas y respuestas. Usa el siguiente formato para cada par:
+
+    P: [Pregunta del empleado]
+    R: [Respuesta detallada]
+
+**Ejemplo:**
+P: ¿Cuántos días de vacaciones anuales tengo?
+R: En Ciklum, tienes derecho a 23 días laborables de vacaciones al año. Estos días deben ser utilizados antes del 31 de marzo del año siguiente al que se generaron.
+
+Asegúrate de ser exhaustivo y de que cada respuesta contenga toda la información relevante del documento para esa pregunta específica.
+"""
+
 # ── Utilidades ─────────────────────────────────────────────────────────────
-YEAR_PAT = re.compile(r"(20\d{2})")
-ROW_BAR = re.compile(r"\|.*\|")
-
-
 def extract_year(filename: str) -> int | None:
-    m = YEAR_PAT.search(filename)
+    m = re.compile(r"(20\d{2})").search(filename)
     return int(m.group(1)) if m else None
 
-
-def generate_questions(chunk: str) -> str:
+def generate_qa_from_text(text: str, filename: str) -> str:
+    """Usa un LLM para convertir un bloque de texto en Q&A detallado."""
+    if not text.strip():
+        return ""
     try:
-        resp = text_llm.invoke([
-            SystemMessage(content="Genera 3 preguntas complejas que un empleado podría hacer cuya respuesta esté en el fragmento"),
-            HumanMessage(content=chunk)
+        print(f"Generando Q&A para {filename}...")
+        resp = qa_llm.invoke([
+            SystemMessage(content=QA_SYSTEM_PROMPT),
+            HumanMessage(content=f"Aquí está el contenido del documento '{filename}':\n\n---\n\n{text}")
         ])
         return resp.content.strip()
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ Error generando Q&A para {filename}: {e}")
         return ""
 
+# ── Extracción de textos (simplificada para obtener el texto completo) ───────
 
-def add_chunk(text: str, meta: dict, texts: list[str], metas: list[dict]):
-    enriched = f"PREGUNTAS:\n{generate_questions(text)}\n---\n{text}"
-    texts.append(enriched)
-    metas.append(meta)
-
-
-def split_table_rows(page_text: str) -> list[tuple[str, dict]]:
-    rows: list[tuple[str, dict]] = []
-    buffer: list[str] = []
-    header: list[str] = []
-    for ln in page_text.splitlines():
-        if ROW_BAR.match(ln):
-            if not header:
-                header.append(ln)
-                continue
-            buffer.append(ln)
-            cols = [c.strip() for c in ln.split("|") if c.strip()]
-            if cols:
-                rows.append(("\n".join(header + [ln]), {"row": cols[0]}))
-        else:
-            header, buffer = [], []
-    return rows
-
-
-# ── Extracción de textos ───────────────────────────────────────────────────
-
-def extract_text_from_pdf(path: str) -> list[tuple[str, int]]:
-    """Devuelve lista de (texto, nº de página). Usa PyMuPDF; si la página está vacía ⇒ None."""
-    results = []
+def extract_text_from_pdf(path: str) -> str:
+    """Extrae todo el texto de un PDF."""
+    full_text = []
     with fitz.open(path) as doc:
-        for i, page in enumerate(doc, 1):
-            text = page.get_text("text").strip()
-            results.append((text, i))
-    return results
+        for page in doc:
+            full_text.append(page.get_text("text").strip())
+    return "\n\n".join(full_text)
 
-
-def vision_extract(img_bytes: bytes) -> str:
-    def handler(signum, frame):
-        raise TimeoutError
-    signal.signal(signal.SIGALRM, handler)
-    signal.alarm(VISION_TIMEOUT)
-    try:
-        b64 = base64.b64encode(img_bytes).decode()
-        resp = vision_llm.invoke([
-            SystemMessage(content="Extrae todo el texto y tablas como Markdown"),
-            HumanMessage(content=[
-                {"type": "text", "text": "Procesa la imagen"},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
-            ])
-        ])
-        return resp.content
-    finally:
-        signal.alarm(0)
-
-
-def process_pdf(path: str) -> tuple[list[str], list[dict]]:
-    texts, metas = [], []
-    basename = os.path.basename(path)
-    year = extract_year(basename)
-
-    raw_pages = extract_text_from_pdf(path)
-    # convert pages lacking text
-    for page_text, page_num in tqdm(raw_pages, desc=f"{basename}"):
-        if page_text:
-            add_chunk(page_text, {"source": basename, "page": page_num, "doc_year": year}, texts, metas)
-            for row_text, row_meta in split_table_rows(page_text):
-                add_chunk(row_text, {"source": basename, "page": page_num, "doc_year": year, **row_meta}, texts, metas)
-            continue
-        # page likely scanned → use vision
-        try:
-            png = convert_from_path(path, first_page=page_num, last_page=page_num)[0]
-            buf = BytesIO(); png.save(buf, format="PNG")
-            vision_text = vision_extract(buf.getvalue())
-            if vision_text:
-                add_chunk(vision_text, {"source": basename, "page": page_num, "doc_year": year}, texts, metas)
-                for row_text, row_meta in split_table_rows(vision_text):
-                    add_chunk(row_text, {"source": basename, "page": page_num, "doc_year": year, **row_meta}, texts, metas)
-        except TimeoutError:
-            print(f"⚠️  Timeout visión pág {page_num} de {basename}")
-        except Exception as e:
-            print(f"⚠️  Error visión pág {page_num} de {basename}: {e}")
-    return texts, metas
-
-
-def process_pptx(path: str) -> tuple[list[str], list[dict]]:
-    texts, metas = [], []
-    basename = os.path.basename(path)
-    year = extract_year(basename)
+def extract_text_from_pptx(path: str) -> str:
+    """Extrae todo el texto de una presentación de PowerPoint."""
     prs = pptx.Presentation(path)
-    for i, slide in enumerate(tqdm(prs.slides, desc=basename), 1):
+    full_text = []
+    for slide in prs.slides:
         slide_text = "\n".join(
-            [sh.text for sh in slide.shapes if getattr(sh, "text", "")]  # type: ignore[attr-defined]
+            [sh.text for sh in slide.shapes if getattr(sh, "text", "")]
         ).strip()
-        if not slide_text:
-            continue
-        add_chunk(slide_text, {"source": basename, "slide": i, "doc_year": year}, texts, metas)
-        for row_text, row_meta in split_table_rows(slide_text):
-            add_chunk(row_text, {"source": basename, "slide": i, "doc_year": year, **row_meta}, texts, metas)
-    return texts, metas
+        if slide_text:
+            full_text.append(slide_text)
+    return "\n\n".join(full_text)
 
-# --- NUEVAS FUNCIONES ---
-
-def process_docx(path: str) -> tuple[list[str], list[dict]]:
-    """Extrae texto de un documento de Word (.docx)."""
-    texts, metas = [], []
-    basename = os.path.basename(path)
-    year = extract_year(basename)
+def extract_text_from_docx(path: str) -> str:
+    """Extrae todo el texto de un documento de Word."""
     doc = docx.Document(path)
-    full_text = "\n".join([para.text for para in doc.paragraphs])
-    if full_text:
-        add_chunk(full_text, {"source": basename, "doc_year": year}, texts, metas)
-    return texts, metas
+    return "\n".join([para.text for para in doc.paragraphs])
 
-def process_xlsx(path: str) -> tuple[list[str], list[dict]]:
-    """Extrae texto de cada hoja de un fichero Excel (.xlsx)."""
-    texts, metas = [], []
-    basename = os.path.basename(path)
-    year = extract_year(basename)
+def extract_text_from_xlsx(path: str) -> str:
+    """Extrae texto de todas las hojas de un fichero Excel."""
     workbook = openpyxl.load_workbook(path)
+    full_text = []
     for sheetname in workbook.sheetnames:
         sheet = workbook[sheetname]
         sheet_text = "\n".join(
             [",".join([str(cell.value) for cell in row if cell.value is not None]) for row in sheet.iter_rows()]
         )
         if sheet_text:
-            meta = {"source": basename, "sheet": sheetname, "doc_year": year}
-            add_chunk(sheet_text, meta, texts, metas)
-    return texts, metas
+            full_text.append(f"--- Hoja: {sheetname} ---\n{sheet_text}")
+    return "\n\n".join(full_text)
 
-def process_image(path: str) -> tuple[list[str], list[dict]]:
-    """Extrae texto de un fichero de imagen usando OCR (GPT-4o Vision)."""
-    texts, metas = [], []
-    basename = os.path.basename(path)
-    year = extract_year(basename)
+def extract_text_from_image(path: str) -> str:
+    """Usa GPT-4o Vision para extraer texto de una imagen."""
     try:
         with open(path, "rb") as f:
             img_bytes = f.read()
-        vision_text = vision_extract(img_bytes)
-        if vision_text:
-            add_chunk(vision_text, {"source": basename, "doc_year": year}, texts, metas)
+        b64_image = base64.b64encode(img_bytes).decode('utf-8')
+        vision_llm = ChatOpenAI(model="gpt-4o", openai_api_base=API_BASE, openai_api_key=API_KEY, max_tokens=2048)
+        resp = vision_llm.invoke([
+            HumanMessage(
+                content=[
+                    {"type": "text", "text": "Extrae todo el texto de esta imagen en el formato original."},
+                    {"type": "image_url", "image_url": f"data:image/jpeg;base64,{b64_image}"}
+                ]
+            )
+        ])
+        return resp.content.strip()
     except Exception as e:
-        print(f"⚠️  Error procesando imagen {basename}: {e}")
-    return texts, metas
+        print(f"⚠️ Error procesando imagen {os.path.basename(path)}: {e}")
+        return ""
 
-# -------------------------
+# ── Procesamiento de ficheros con la nueva lógica ───────────────────────────
 
 def process_file(path: str) -> tuple[list[str], list[dict]]:
-    cache_f = os.path.join(CACHE_DIR, os.path.basename(path) + ".json")
+    basename = os.path.basename(path)
+    cache_f = os.path.join(CACHE_DIR, basename + ".semantic.json")
+    
+    # Comprobar si existe un caché válido
     if os.path.exists(cache_f) and os.path.getmtime(cache_f) > os.path.getmtime(path):
         with open(cache_f, encoding="utf-8") as f:
             cache = json.load(f)
         return cache["texts"], cache["metadatas"]
 
-    # --- LÓGICA ACTUALIZADA ---
+    # Extraer el texto en bruto del fichero
     ext = path.lower().split('.')[-1]
+    raw_text = ""
     if ext == "pdf":
-        t, m = process_pdf(path)
+        raw_text = extract_text_from_pdf(path)
     elif ext == "pptx":
-        t, m = process_pptx(path)
+        raw_text = extract_text_from_pptx(path)
     elif ext == "docx":
-        t, m = process_docx(path)
+        raw_text = extract_text_from_docx(path)
     elif ext == "xlsx":
-        t, m = process_xlsx(path)
+        raw_text = extract_text_from_xlsx(path)
     elif ext in ["png", "jpg", "jpeg"]:
-        t, m = process_image(path)
-    else:
-        t, m = [], []
-    # ---------------------------
+        raw_text = extract_text_from_image(path)
 
-    if t:
+    if not raw_text.strip():
+        return [], []
+
+    # Generar el contenido semántico (Q&A)
+    qa_content = generate_qa_from_text(raw_text, basename)
+    if not qa_content:
+        return [], []
+        
+    # Dividir el contenido Q&A en chunks y preparar metadatos
+    chunks = text_splitter.split_text(qa_content)
+    metadatas = [{"source": basename, "doc_year": extract_year(basename)} for _ in chunks]
+    
+    # Guardar el resultado en caché
+    if chunks:
         with open(cache_f, "w", encoding="utf-8") as f:
-            json.dump({"texts": t, "metadatas": m}, f, ensure_ascii=False)
-    return t, m
-
+            json.dump({"texts": chunks, "metadatas": metadatas}, f, ensure_ascii=False)
+            
+    return chunks, metadatas
 
 # ── Main ───────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("── Construyendo índice vectorial (multiformato) ──")
+    print("── Construyendo índice vectorial con Extracción Semántica (Q&A) ──")
     os.makedirs(CACHE_DIR, exist_ok=True)
 
-    # --- BÚSQUEDA DE FICHEROS ACTUALIZADA ---
     extensions_to_process = ("*.pdf", "*.pptx", "*.docx", "*.xlsx", "*.png", "*.jpg", "*.jpeg")
     files = [f for ext in extensions_to_process for f in glob.glob(os.path.join(DOCS_FOLDER, ext))]
     print(f"Se encontraron {len(files)} documentos. Procesando con {MAX_WORKERS} workers…")
-    # ----------------------------------------
-
+    
     all_texts, all_metas = [], []
+    # Nota: El procesamiento con LLMs puede ser más lento. Se mantiene el pool para I/O.
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as pool:
         futs = {pool.submit(process_file, fp): fp for fp in files}
         for fut in tqdm(as_completed(futs), total=len(futs), desc="Documentos"):
             fp = futs[fut]
             try:
-                t, m = fut.result()
-                all_texts.extend(t); all_metas.extend(m)
+                texts, metas = fut.result()
+                all_texts.extend(texts)
+                all_metas.extend(metas)
             except Exception as e:
                 print(f"❌ Error procesando {fp}: {e}")
 
@@ -274,6 +221,6 @@ if __name__ == "__main__":
 
     if all_texts:
         Chroma.from_texts(all_texts, embedder, metadatas=all_metas, persist_directory=PERSIST_DIR)
-        print(f"✅ Índice vectorial creado con {len(all_texts)} chunks.")
+        print(f"✅ Índice vectorial creado con {len(all_texts)} chunks semánticos.")
     else:
-        print("❌ Sin contenido indexado. Comprueba los documentos.")
+        print("❌ Sin contenido indexado. Comprueba los documentos o los logs de error.")
