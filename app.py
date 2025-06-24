@@ -1,6 +1,6 @@
-# app.py (v10 - Solución Híbrida Definitiva)
-# Objetivo: Combinar un retriever preciso (k=7) con un prompt ultra-estricto
-# para eliminar la confusión de temas y garantizar respuestas enfocadas.
+# app.py (v11 - Solución Equilibrada y Fiable)
+# Objetivo: Encontrar un equilibrio entre un retriever con suficiente contexto (k=12)
+# y un prompt inteligente que evite explícitamente la mezcla de temas.
 
 import os
 import logging
@@ -45,7 +45,7 @@ CONTEXTUALIZE_PROMPT_TEMPLATE = """
 Dada la siguiente conversación (chat_history) y la última pregunta del usuario (input), reformula la pregunta para que sea una pregunta independiente y clara que pueda entenderse sin el historial previo. No respondas a la pregunta, únicamente reformúlala.
 """
 
-# 2. Prompt Principal (v10 - Ultra Estricto)
+# 2. Prompt Principal (v11 - Equilibrado e Inteligente)
 RAG_PROMPT_TEMPLATE = """
 **TU MISIÓN:** Eres HRCiklum, un asistente de IA experto y servicial para los empleados de Ciklum. Tu objetivo es responder a sus preguntas de forma clara y precisa, basándote **única y exclusivamente** en la información contenida en el CONTEXTO que se te proporciona.
 
@@ -56,9 +56,9 @@ RAG_PROMPT_TEMPLATE = """
 4.  **SI NO LO ENCUENTRAS, ESCALA A RRHH:** Si la respuesta no se encuentra en el CONTEXTO, tu única respuesta posible debe ser: "He revisado la documentación disponible, pero no he encontrado una respuesta directa a tu consulta. Para darte la información más precisa, te recomiendo que lo consultes directamente con el departamento de RRHH."
 
 **INSTRUCCIONES AVANZADAS DE RAZONAMIENTO:**
-* **ENFOQUE ESTRICTO EN LA PREGUNTA (REGLA CRÍTICA):** Tu única tarea es responder a la PREGUNTA DEL USUARIO. Lee la pregunta con mucha atención. Si el CONTEXTO contiene información sobre otros temas, aunque estén relacionados, **ignórala por completo**. No resumas el contexto; céntrate exclusivamente en proporcionar la información que resuelve la duda del usuario.
-* **SÍNTESIS INTELIGENTE:** Si varias partes del CONTEXTO responden a la misma pregunta, combínalas para crear una respuesta única y coherente.
-* **RESOLUCIÓN DE CONFLICTOS:** Si encuentras datos contradictorios, prioriza siempre la información del fragmento que trate el tema de forma más directa y específica.
+* **PRECISIÓN ANTE TODO:** Tu objetivo principal es responder de forma precisa a la PREGUNTA DEL USUARIO. Antes de redactar, asegúrate de haber entendido la pregunta a la perfección.
+* **SÍNTESIS CUIDADOSA (REGLA CRÍTICA):** Puedes y debes combinar información de diferentes partes del CONTEXTO para construir una respuesta completa. Sin embargo, ten mucho cuidado: **no mezcles temas distintos aunque aparezcan juntos en el contexto**. Por ejemplo, si la pregunta es sobre el 'seguro médico', responde únicamente sobre el seguro médico, incluso si el texto también menciona 'retribución flexible' o 'formación de riesgos laborales'. Céntrate en responder solo lo que se pregunta.
+* **RESOLUCIÓN DE CONFLICTOS:** Si encuentras datos contradictorios (p. ej., dos empresas para un mismo beneficio), prioriza la información del fragmento que trate el tema de forma más directa y específica, ignorando la información tangencial.
 
 **CONTEXTO DE LOS DOCUMENTOS:**
 {context}
@@ -75,17 +75,17 @@ chain = None
 try:
     llm = ChatOpenAI(model_name=MODEL_NAME, temperature=0.0, openai_api_base=BASE_URL, openai_api_key=API_KEY)
     embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL_NAME, openai_api_base=BASE_URL, openai_api_key=API_KEY)
-    
+
     vector_store = Chroma(persist_directory=PERSIST_DIRECTORY, embedding_function=embedder)
-    
+
     item_count = vector_store._collection.count()
     logging.info(f"✅ La base de datos se ha cargado con {item_count} documentos.")
     if item_count == 0:
         logging.warning("ADVERTENCIA: La base de datos se ha cargado pero está vacía.")
 
-    # *** CAMBIO 1: RETRIEVER PRECISO ***
-    # Volvemos a un valor de k más bajo (7) para reducir el "ruido" y la contaminación de contexto.
-    base_retriever = vector_store.as_retriever(search_kwargs={"k": 7})
+    # *** CAMBIO 1: RETRIEVER EQUILIBRADO ***
+    # Usamos un valor intermedio (k=12) para tener suficiente contexto sin generar demasiado ruido.
+    base_retriever = vector_store.as_retriever(search_kwargs={"k": 12})
     retriever_with_multiquery = MultiQueryRetriever.from_llm(retriever=base_retriever, llm=llm)
 
     def format_docs(docs: List[Document]) -> str:
@@ -98,14 +98,14 @@ try:
     ])
     history_aware_retriever = create_history_aware_retriever(llm, retriever_with_multiquery, contextualize_q_prompt)
 
-    # *** CAMBIO 2: PROMPT ULTRA-ESTRICTO ***
-    # El nuevo RAG_PROMPT_TEMPLATE tiene instrucciones más directas.
+    # *** CAMBIO 2: PROMPT MÁS INTELIGENTE ***
+    # El nuevo RAG_PROMPT_TEMPLATE es más específico sobre cómo manejar temas mezclados.
     answer_generation_prompt = ChatPromptTemplate.from_messages([
         ("system", RAG_PROMPT_TEMPLATE),
         MessagesPlaceholder(variable_name="chat_history"),
         ("human", "{input}"),
     ])
-    
+
     rag_chain = (
         RunnablePassthrough.assign(
             context=history_aware_retriever
@@ -122,7 +122,7 @@ try:
     )
 
     chain = rag_chain
-    logging.info("✅ Arquitectura de IA Conversacional (v10) inicializada correctamente.")
+    logging.info("✅ Arquitectura de IA Conversacional (v11) inicializada correctamente.")
 
 except Exception as e:
     logging.critical(f"❌ FATAL: La cadena RAG no pudo inicializarse: {e}", exc_info=True)
