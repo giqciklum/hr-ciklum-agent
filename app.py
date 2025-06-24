@@ -83,7 +83,7 @@ try:
 
     # *** CAMBIO 1: CORRECCIÓN DEL BUG - ELIMINADO 'score_threshold' ***
     # Este cambio soluciona el TypeError y evita que la app se caiga.
-    base_retriever = vector_store.as_retriever(search_kwargs={"k": 8})
+    base_retriever = vector_store.as_retriever(search_kwargs={"k": 15})
     
     document_compressor = LLMChainExtractor.from_llm(llm)
     contextual_compression_retriever = ContextualCompressionRetriever(
