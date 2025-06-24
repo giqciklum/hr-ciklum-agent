@@ -38,12 +38,12 @@ TEXT_MODEL = "gpt-4o"
 DOCS_FOLDER = "docs"
 CACHE_DIR = ".cache/doc_cache"
 PERSIST_DIR = "chroma_db"
-# === CAMBIO CLAVE: CHUNKS AÚN MÁS PEQUEÑOS PARA MÁXIMA PRECISIÓN ===
-# Con chunks de 512, es muy improbable que conceptos distintos como
-# 'formación PRL' y 'examen de salud' se mezclen en el mismo fragmento.
-CHUNK_SIZE = 512
-CHUNK_OVERLAP = 100
-# ======================================================================
+# === CAMBIO CLAVE: CHUNKS MÁS PEQUEÑOS Y ENFOCADOS ===
+# Un chunk más pequeño asegura que la información recuperada sea altamente relevante
+# para la pregunta del usuario, reduciendo el "ruido".
+CHUNK_SIZE = 1024
+CHUNK_OVERLAP = 150
+# ======================================================
 MAX_WORKERS = min(os.cpu_count() or 4, 4)
 VISION_TIMEOUT = 90
 
