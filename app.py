@@ -1,6 +1,6 @@
-# app.py (v11 - Solución Equilibrada y Fiable)
-# Objetivo: Encontrar un equilibrio entre un retriever con suficiente contexto (k=12)
-# y un prompt inteligente que evite explícitamente la mezcla de temas.
+# app.py (v12 - Solución con Plan de Acción)
+# Objetivo: Implementar un "Plan de Acción" en el prompt para forzar un razonamiento
+# estructurado y eliminar definitivamente la mezcla de temas.
 
 import os
 import logging
@@ -45,20 +45,22 @@ CONTEXTUALIZE_PROMPT_TEMPLATE = """
 Dada la siguiente conversación (chat_history) y la última pregunta del usuario (input), reformula la pregunta para que sea una pregunta independiente y clara que pueda entenderse sin el historial previo. No respondas a la pregunta, únicamente reformúlala.
 """
 
-# 2. Prompt Principal (v11 - Equilibrado e Inteligente)
+# 2. Prompt Principal (v12 - Con Plan de Acción)
 RAG_PROMPT_TEMPLATE = """
-**TU MISIÓN:** Eres HRCiklum, un asistente de IA experto y servicial para los empleados de Ciklum. Tu objetivo es responder a sus preguntas de forma clara y precisa, basándote **única y exclusivamente** en la información contenida en el CONTEXTO que se te proporciona.
+**TU MISIÓN:** Eres HRCiklum, un asistente de IA experto y muy preciso para los empleados de Ciklum. Tu objetivo es responder a las preguntas basándote **única y exclusivamente** en la información del CONTEXTO proporcionado.
 
 **REGLAS DE ORO (INVIOLABLES):**
-1.  **IDIOMA:** Responde **siempre y únicamente** en el mismo idioma en el que está escrita la PREGUNTA DEL USUARIO.
-2.  **TONO AMIGABLE Y PROFESIONAL:** Tu forma de responder debe ser siempre cercana y natural, como la de un compañero de RRHH de confianza que quiere ayudar.
-3.  **100% BASADO EN EL CONTEXTO:** Tu conocimiento se limita **estrictamente** al CONTEXTO. No inventes información ni uses conocimiento externo.
-4.  **SI NO LO ENCUENTRAS, ESCALA A RRHH:** Si la respuesta no se encuentra en el CONTEXTO, tu única respuesta posible debe ser: "He revisado la documentación disponible, pero no he encontrado una respuesta directa a tu consulta. Para darte la información más precisa, te recomiendo que lo consultes directamente con el departamento de RRHH."
+1.  **IDIOMA:** Responde **siempre** en el mismo idioma de la PREGUNTA DEL USUARIO.
+2.  **TONO:** Sé amigable, profesional y servicial.
+3.  **BASE EN EL CONTEXTO:** Tu conocimiento se limita **estrictamente** al CONTEXTO. No inventes información.
+4.  **SI NO SABES, ESCALA:** Si la respuesta no está en el CONTEXTO, responde: "He revisado la documentación disponible, pero no he encontrado una respuesta directa a tu consulta. Para darte la información más precisa, te recomiendo que lo consultes directamente con el departamento de RRHH."
 
-**INSTRUCCIONES AVANZADAS DE RAZONAMIENTO:**
-* **PRECISIÓN ANTE TODO:** Tu objetivo principal es responder de forma precisa a la PREGUNTA DEL USUARIO. Antes de redactar, asegúrate de haber entendido la pregunta a la perfección.
-* **SÍNTESIS CUIDADOSA (REGLA CRÍTICA):** Puedes y debes combinar información de diferentes partes del CONTEXTO para construir una respuesta completa. Sin embargo, ten mucho cuidado: **no mezcles temas distintos aunque aparezcan juntos en el contexto**. Por ejemplo, si la pregunta es sobre el 'seguro médico', responde únicamente sobre el seguro médico, incluso si el texto también menciona 'retribución flexible' o 'formación de riesgos laborales'. Céntrate en responder solo lo que se pregunta.
-* **RESOLUCIÓN DE CONFLICTOS:** Si encuentras datos contradictorios (p. ej., dos empresas para un mismo beneficio), prioriza la información del fragmento que trate el tema de forma más directa y específica, ignorando la información tangencial.
+**PLAN DE ACCIÓN INTERNO (OBLIGATORIO):**
+Antes de escribir tu respuesta, sigue mentalmente estos 4 pasos:
+1.  **IDENTIFICAR EL TEMA CENTRAL:** ¿Cuál es el tema único y específico sobre el que pregunta el usuario? (p.ej., 'proceso para el examen de salud', 'proveedor del seguro médico').
+2.  **FILTRAR EL CONTEXTO:** De todos los fragmentos de texto en el CONTEXTO, selecciona **únicamente** aquellos que hablan directamente sobre ese TEMA CENTRAL. Ignora por completo los fragmentos que traten otros temas, incluso si están cerca o relacionados.
+3.  **CONSTRUIR LA RESPUESTA:** Redacta tu respuesta usando **solo** la información de los fragmentos que has filtrado en el paso 2.
+4.  **VERIFICACIÓN FINAL:** Revisa tu respuesta antes de finalizar. ¿Responde estrictamente a la pregunta del usuario? ¿Has incluido accidentalmente información sobre otros temas? Si es así, corrígela.
 
 **CONTEXTO DE LOS DOCUMENTOS:**
 {context}
@@ -67,7 +69,7 @@ RAG_PROMPT_TEMPLATE = """
 **PREGUNTA DEL USUARIO (ya contextualizada con el historial):**
 {input}
 
-**TU RESPUESTA (en el mismo idioma que la pregunta):**
+**TU RESPUESTA (siguiendo el Plan de Acción):**
 """
 
 # --- Arquitectura de la Cadena de IA (Simplificada y Robusta) ---
@@ -84,8 +86,8 @@ try:
         logging.warning("ADVERTENCIA: La base de datos se ha cargado pero está vacía.")
 
     # *** CAMBIO 1: RETRIEVER EQUILIBRADO ***
-    # Usamos un valor intermedio (k=12) para tener suficiente contexto sin generar demasiado ruido.
-    base_retriever = vector_store.as_retriever(search_kwargs={"k": 12})
+    # Usamos k=15 para un contexto amplio pero manejable.
+    base_retriever = vector_store.as_retriever(search_kwargs={"k": 15})
     retriever_with_multiquery = MultiQueryRetriever.from_llm(retriever=base_retriever, llm=llm)
 
     def format_docs(docs: List[Document]) -> str:
@@ -98,8 +100,7 @@ try:
     ])
     history_aware_retriever = create_history_aware_retriever(llm, retriever_with_multiquery, contextualize_q_prompt)
 
-    # *** CAMBIO 2: PROMPT MÁS INTELIGENTE ***
-    # El nuevo RAG_PROMPT_TEMPLATE es más específico sobre cómo manejar temas mezclados.
+    # *** CAMBIO 2: PROMPT CON PLAN DE ACCIÓN ***
     answer_generation_prompt = ChatPromptTemplate.from_messages([
         ("system", RAG_PROMPT_TEMPLATE),
         MessagesPlaceholder(variable_name="chat_history"),
@@ -122,7 +123,7 @@ try:
     )
 
     chain = rag_chain
-    logging.info("✅ Arquitectura de IA Conversacional (v11) inicializada correctamente.")
+    logging.info("✅ Arquitectura de IA Conversacional (v12) inicializada correctamente.")
 
 except Exception as e:
     logging.critical(f"❌ FATAL: La cadena RAG no pudo inicializarse: {e}", exc_info=True)
