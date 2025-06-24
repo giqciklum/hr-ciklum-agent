@@ -1,11 +1,9 @@
-# app_v2.py (Asistente Experto v16 - Preciso, Conciso y Robusto)
-# Objetivo: Respuestas cortas, precisas y accionables. Arquitectura optimizada.
+# app.py (Corregido y Funcional)
 import os
 import logging
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
-from typing import List
-
+from typing import List, Dict, Any
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.documents import Document
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
@@ -14,7 +12,11 @@ from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.chains import create_history_aware_retriever
 from langchain.retrievers import ContextualCompressionRetriever
-from langchain.retrievers.document_compressors import LLMChainExtractor, EmbeddingsFilter
+from langchain.retrievers.document_compressors import (
+    LLMChainExtractor,
+    EmbeddingsFilter,
+    DocumentCompressorPipeline # <-- CORRECCIÓN: Importación añadida
+)
 from langchain_core.messages import HumanMessage, AIMessage
 
 # --- Configuración Inicial ---
@@ -24,26 +26,21 @@ load_dotenv()
 # --- Constantes y Variables de Entorno ---
 API_KEY = os.getenv("OPENAI_API_KEY")
 BASE_URL = os.getenv("OPENAI_API_BASE", "https://genai-gateway.azure-api.net/")
-PERSIST_DIRECTORY = "chroma_db_v2" # Apuntar al nuevo índice
+PERSIST_DIRECTORY = "chroma_db_v2"
 MODEL_NAME = "gpt-4o"
 EMBEDDING_MODEL_NAME = "text-embedding-3-large"
 
 if not API_KEY:
     logging.critical("FATAL: No se ha encontrado la 'OPENAI_API_KEY'.")
-    exit() # Salir si no hay clave
+    exit()
 
 # --- "Memoria" del Chatbot ---
-chat_histories = {}
+chat_histories: Dict[str, Any] = {}
 
-# --- Plantillas de Prompt: El Corazón del Asistente ---
-
-# 1. Prompt para Contextualizar la Pregunta (sin cambios)
+# --- Plantillas de Prompt ---
 CONTEXTUALIZE_PROMPT_TEMPLATE = """Dada la siguiente conversación (chat_history) y la última pregunta del usuario (input), reformula la pregunta para que sea una pregunta independiente y clara que pueda entenderse sin el historial previo. No respondas a la pregunta, únicamente reformúlala."""
-
-# === MEJORA 1: PROMPT PRINCIPAL MÁS DIRECTIVO Y CONCISO ===
 RAG_PROMPT_V4 = """
 **TU ROL:** Eres HRCiklum, el asistente de RRHH de IA para empleados de Ciklum. Eres un compañero experto, fiable y práctico. Tu credibilidad es tu mayor valor.
-
 **TUS PRINCIPIOS (INQUEBRANTABLES):**
 1.  **BASE EN LA EVIDENCIA:** Basa tus respuestas **única y exclusivamente** en la información del CONTEXTO proporcionado. **NUNCA INVENTES NADA.**
 2.  **INTERPRETA Y AYUDA:** Infiere la necesidad real del usuario. Si preguntan "¿quién me ayuda?", busca en el CONTEXTO el contacto o procedimiento específico para su problema implícito.
@@ -51,48 +48,49 @@ RAG_PROMPT_V4 = """
 4.  **GESTIÓN DE INCERTIDUMBRE:** Si el CONTEXTO es parcial, di lo que sabes y guía al siguiente paso. Solo si el CONTEXTO está vacío, responde: "He revisado la documentación interna y no he encontrado información sobre este tema. Para una respuesta precisa, consulta directamente con RRHH."
 5.  **CLARIDAD Y CONCISIÓN:** Responde en **menos de 100 palabras** o un máximo de 5 puntos clave. Ve al grano.
 6.  **SIN RELLENO:** Evita frases como "Espero que esto ayude" o "Como modelo de IA...". Sé directo y profesional.
-
 **CONTEXTO (Información interna y verificada de Ciklum):**
 {context}
-
 ---
 **PREGUNTA DEL USUARIO (previamente analizada y contextualizada):**
 {input}
-
 **TU RESPUESTA (clara, práctica y basada 100% en el contexto):**
 """
+SHORTEN_PROMPT = ChatPromptTemplate.from_template(
+    "Resume la siguiente respuesta de un asistente de RRHH en menos de 100 palabras, manteniendo la terminología y los puntos clave. Sé directo y práctico.\n\nRESPUESTA ORIGINAL:\n{rag_answer}"
+)
 
 # --- Arquitectura de la Cadena de IA ---
+final_chain = None
 try:
-    # === MEJORA 2: HARD-LIMIT DE TOKENS EN EL LLM ===
     llm = ChatOpenAI(
         model_name=MODEL_NAME,
         temperature=0.0,
         openai_api_base=BASE_URL,
         openai_api_key=API_KEY,
-        max_tokens=350, # Límite para evitar respuestas demasiado largas
-        request_timeout=60 # Timeout para evitar esperas infinitas
+        max_tokens=350,
+        request_timeout=60
     )
     embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL_NAME, openai_api_base=BASE_URL, openai_api_key=API_KEY)
     vector_store = Chroma(persist_directory=PERSIST_DIRECTORY, embedding_function=embedder)
-
     logging.info(f"✅ Base de datos cargada con {vector_store._collection.count()} chunks.")
 
-    # === MEJORA 3: RECUPERACIÓN AVANZADA (MMR + COMPRESIÓN EFICIENTE) ===
-    # 1. Usar MMR para obtener resultados diversos y evitar chunks redundantes del mismo documento.
+    # === CORRECCIÓN: Se usa DocumentCompressorPipeline para encadenar los compresores ===
     base_retriever = vector_store.as_retriever(
         search_type="mmr",
-        search_kwargs={"k": 12, "lambda_mult": 0.5, "fetch_k": 25} # lambda_mult: 0.5 es un buen balance entre relevancia y diversidad
+        search_kwargs={"k": 12, "lambda_mult": 0.5, "fetch_k": 25}
     )
-    
-    # 2. Compresor en dos fases: Filtro rápido de embeddings + Extractor LLM para refinar.
     embeddings_filter = EmbeddingsFilter(embeddings=embedder, similarity_threshold=0.78)
-    document_compressor = LLMChainExtractor.from_llm(llm)
+    llm_extractor = LLMChainExtractor.from_llm(llm)
+    
+    pipeline_compressor = DocumentCompressorPipeline(
+        transformers=[embeddings_filter, llm_extractor]
+    )
     
     contextual_compression_retriever = ContextualCompressionRetriever(
-        base_compressor=embeddings_filter | document_compressor, # Encadenar compresores
+        base_compressor=pipeline_compressor,
         base_retriever=base_retriever
     )
+    # === FIN DE LA CORRECCIÓN ===
 
     def format_docs(docs: List[Document]) -> str:
         return "\n\n".join(doc.page_content for doc in docs)
@@ -102,14 +100,13 @@ try:
         MessagesPlaceholder(variable_name="chat_history"),
         ("human", "{input}"),
     ])
-    
     history_aware_retriever = create_history_aware_retriever(llm, contextual_compression_retriever, contextualize_q_prompt)
-
+    
     answer_generation_prompt = ChatPromptTemplate.from_messages([
         ("system", RAG_PROMPT_V4),
         ("human", "{input}"),
     ])
-
+    
     rag_chain = (
         {
             "context": history_aware_retriever | format_docs,
@@ -119,37 +116,28 @@ try:
         | llm
         | StrOutputParser()
     )
-
-    # === MEJORA 4 (OPCIONAL): CAPA DE CONCISIÓN FINAL ===
-    # Esta cadena toma la respuesta de RAG y la fuerza a ser aún más corta.
-    # Aumenta ligeramente la latencia y el coste, pero garantiza la brevedad.
-    SHORTEN_PROMPT = ChatPromptTemplate.from_template(
-        "Resume la siguiente respuesta de un asistente de RRHH en menos de 100 palabras, manteniendo la terminología y los puntos clave. Sé directo y práctico.\n\nRESPUESTA ORIGINAL:\n{rag_answer}"
-    )
     
     conciseness_chain = SHORTEN_PROMPT | llm | StrOutputParser()
 
-    # === MEJORA 5: AÑADIR UN POST-AMBLE PARA GESTIONAR EXPECTATIVAS ===
     def add_postamble(answer: str) -> str:
         postamble = "\n\n*Respuesta generada por HRCiklum. Escribe 'detalles' si necesitas más información.*"
         return answer.strip() + postamble
 
-    # Cadena final que une todo
+    # === CORRECCIÓN: La cadena final devuelve un diccionario para poder usar la función "detalles" ===
     final_chain = {
         "rag_answer": rag_chain,
     } | RunnablePassthrough.assign(
-        # Descomenta la siguiente línea para activar la capa de concisión
+        # Descomenta la siguiente línea para activar la capa de concisión.
         # answer=lambda x: conciseness_chain.invoke({"rag_answer": x["rag_answer"]})
-        # O usa esta línea para la respuesta directa de RAG
+        # O usa esta línea para la respuesta directa de RAG (más rápido).
         answer=RunnableLambda(lambda x: x["rag_answer"])
-    ) | RunnableLambda(lambda x: add_postamble(x['answer']))
-
-
+    )
+    # La cadena ahora devuelve un diccionario: {'rag_answer': '...', 'answer': '...'}
+    
     logging.info("✅ Arquitectura de IA Experta (v16) inicializada correctamente.")
 
 except Exception as e:
     logging.critical(f"❌ FATAL: La cadena RAG no pudo inicializarse: {e}", exc_info=True)
-    final_chain = None
 
 # --- Aplicación Web Flask ---
 app = Flask(__name__)
@@ -167,28 +155,36 @@ def handle_chat_event():
         return jsonify({})
 
     logging.info(f"Consulta recibida de '{session_id}': '{user_input}'")
+    
+    # === CORRECCIÓN: Lógica para "detalles" y manejo del historial ===
     current_chat_history = chat_histories.get(session_id, [])
-
+    
     try:
-        # Si el usuario pide más detalles, podríamos invocar una cadena diferente
-        # o simplemente pasar la respuesta más larga (rag_answer)
-        if user_input.lower() == "detalles" and "last_rag_answer" in chat_histories.get(session_id, {}):
-             answer = chat_histories[session_id]["last_rag_answer"]
+        if user_input.lower() == "detalles" and chat_histories.get(f"{session_id}_last_rag_answer"):
+            # Si el usuario pide detalles, le damos la última respuesta larga guardada
+            answer_for_user = chat_histories[f"{session_id}_last_rag_answer"]
         else:
-            result = final_chain.invoke({"input": user_input, "chat_history": current_chat_history})
-            answer = result # La cadena ahora devuelve directamente el string final
+            # Invoca la cadena principal
+            result = final_chain.invoke({
+                "input": user_input,
+                "chat_history": current_chat_history
+            })
+            
+            # Guardamos la respuesta larga por si la piden después
+            chat_histories[f"{session_id}_last_rag_answer"] = result['rag_answer']
+            
+            # La respuesta para el usuario es la versión corta con el post-amble
+            answer_for_user = add_postamble(result['answer'])
 
-        # Actualizar historial
+        # Actualizar el historial de conversación para la siguiente pregunta
         current_chat_history.extend([
             HumanMessage(content=user_input),
-            AIMessage(content=answer)
+            AIMessage(content=answer_for_user)
         ])
-        # Guardar la última respuesta larga por si piden 'detalles'
-        # chat_histories[session_id] = {"history": current_chat_history[-10:], "last_rag_answer": result['rag_answer']}
-        chat_histories[session_id] = current_chat_history[-10:]
+        chat_histories[session_id] = current_chat_history[-10:] # Guardar solo los últimos 5 turnos
 
-        logging.info(f"Respuesta generada para '{session_id}': '{answer}'")
-        return jsonify({"text": answer})
+        logging.info(f"Respuesta generada para '{session_id}': '{answer_for_user}'")
+        return jsonify({"text": answer_for_user})
 
     except Exception as e:
         logging.error(f"Error procesando la solicitud RAG: {e}", exc_info=True)
