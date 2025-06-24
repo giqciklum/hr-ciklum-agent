@@ -1,6 +1,6 @@
-# app.py (v17 - Asistente Proactivo)
-# Objetivo: Utilizar un prompt avanzado que razona sobre una base de conocimiento
-# Q&A enriquecida, garantizando respuestas completas, prácticas y proactivas.
+# app.py (v18 - Production Ready)
+# Objetivo: Asegurar la compatibilidad con entornos de producción como Cloud Run
+# eliminando el modo de depuración para garantizar un despliegue estable.
 
 import os
 import logging
@@ -135,7 +135,7 @@ try:
     )
 
     chain = rag_chain
-    logging.info("✅ Arquitectura de IA Conversacional (v17 - Proactiva) inicializada correctamente.")
+    logging.info("✅ Arquitectura de IA Conversacional (v18 - Production Ready) inicializada correctamente.")
 
     # Inicia el pre-calentamiento en un hilo separado para no bloquear el inicio de la app.
     warm_up_thread = threading.Thread(target=warm_up_llm, args=(llm,))
@@ -180,5 +180,8 @@ def handle_chat_event():
         return jsonify({"text": "Lo siento, ha ocurrido un error al procesar tu solicitud."}), 500
 
 if __name__ == "__main__":
+    # Esta sección se usa para pruebas locales.
+    # El entorno de producción (como Cloud Run) usará un servidor WSGI como Gunicorn.
     port = int(os.environ.get("PORT", 8080))
-    app.run(port=port, host='0.0.0.0', debug=True)
+    # *** CAMBIO CLAVE: Se ha eliminado 'debug=True' para la estabilidad en producción. ***
+    app.run(port=port, host='0.0.0.0')
