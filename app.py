@@ -1,40 +1,36 @@
-# app.py (v15 - Asistente Experto Fiable, sin Citas)
-# Objetivo: Ser la fuente de verdad definitiva. Responde de forma natural y práctica,
-# interpretando la intención del usuario para ser siempre útil. Corrige el bug de 'score_threshold'.
-
+# app_v2.py (Asistente Experto v16 - Preciso, Conciso y Robusto)
+# Objetivo: Respuestas cortas, precisas y accionables. Arquitectura optimizada.
 import os
 import logging
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from typing import List
 
-# --- Importaciones Clave de LangChain y OpenAI ---
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.documents import Document
-from langchain_core.runnables import RunnablePassthrough
+from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.chains import create_history_aware_retriever
 from langchain.retrievers import ContextualCompressionRetriever
-from langchain.retrievers.document_compressors import LLMChainExtractor
+from langchain.retrievers.document_compressors import LLMChainExtractor, EmbeddingsFilter
 from langchain_core.messages import HumanMessage, AIMessage
 
-# --- Configuración Inicial del Servidor ---
+# --- Configuración Inicial ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 load_dotenv()
 
 # --- Constantes y Variables de Entorno ---
 API_KEY = os.getenv("OPENAI_API_KEY")
 BASE_URL = os.getenv("OPENAI_API_BASE", "https://genai-gateway.azure-api.net/")
-PERSIST_DIRECTORY = "chroma_db"
+PERSIST_DIRECTORY = "chroma_db_v2" # Apuntar al nuevo índice
 MODEL_NAME = "gpt-4o"
 EMBEDDING_MODEL_NAME = "text-embedding-3-large"
 
 if not API_KEY:
-    logging.critical("FATAL: No se ha encontrado la 'OPENAI_API_KEY'. La aplicación no puede iniciarse.")
-else:
-    logging.info("La configuración de la API se ha cargado correctamente.")
+    logging.critical("FATAL: No se ha encontrado la 'OPENAI_API_KEY'.")
+    exit() # Salir si no hay clave
 
 # --- "Memoria" del Chatbot ---
 chat_histories = {}
@@ -42,22 +38,19 @@ chat_histories = {}
 # --- Plantillas de Prompt: El Corazón del Asistente ---
 
 # 1. Prompt para Contextualizar la Pregunta (sin cambios)
-CONTEXTUALIZE_PROMPT_TEMPLATE = """
-Dada la siguiente conversación (chat_history) y la última pregunta del usuario (input), reformula la pregunta para que sea una pregunta independiente y clara que pueda entenderse sin el historial previo. No respondas a la pregunta, únicamente reformúlala.
-"""
+CONTEXTUALIZE_PROMPT_TEMPLATE = """Dada la siguiente conversación (chat_history) y la última pregunta del usuario (input), reformula la pregunta para que sea una pregunta independiente y clara que pueda entenderse sin el historial previo. No respondas a la pregunta, únicamente reformúlala."""
 
-# 2. Prompt Principal (v15 - El Experto Práctico y Fiable)
-RAG_PROMPT_TEMPLATE_V3 = """
-**TU ROL:** Eres HRCiklum, el asistente de RRHH de IA para los empleados de Ciklum. Tu identidad es la de un compañero experto: eres la persona a la que todos acuden porque das respuestas fiables, prácticas y fáciles de entender. Eres proactivo, servicial y tu credibilidad es tu mayor valor.
+# === MEJORA 1: PROMPT PRINCIPAL MÁS DIRECTIVO Y CONCISO ===
+RAG_PROMPT_V4 = """
+**TU ROL:** Eres HRCiklum, el asistente de RRHH de IA para empleados de Ciklum. Eres un compañero experto, fiable y práctico. Tu credibilidad es tu mayor valor.
 
 **TUS PRINCIPIOS (INQUEBRANTABLES):**
-1.  **BASE EN LA EVIDENCIA:** Tus respuestas se basan **única y exclusivamente** en la información del CONTEXTO proporcionado. **NUNCA INVENTES NADA.** Tu reputación depende de tu veracidad.
-2.  **INTERPRETA Y AYUDA:** No eres un simple buscador. Si un usuario pregunta algo general como "¿quién me puede ayudar?" o "tengo un problema", analiza la pregunta y el historial para inferir su necesidad real (ej: 'ayuda con la nómina', 'problema con las vacaciones'). Luego, busca en el CONTEXTO la persona, departamento o procedimiento correcto para resolver esa necesidad específica.
-3.  **RESPUESTAS PRÁCTICAS Y DIRECTAS:** Comunícate de forma natural y clara, no como un robot. Estructura la información para que sea fácil de consumir: usa listas, puntos clave o pasos a seguir. El objetivo es que el empleado sepa exactamente qué hacer después de leer tu respuesta.
-4.  **GESTIÓN DE LA INCERTIDUMBRE:**
-    * Si el CONTEXTO tiene información parcial, úsala. Explica lo que sabes y guía al usuario sobre los siguientes pasos. Ejemplo: "Sobre el seguro para padres, la póliza general menciona la cobertura para familiares directos. Para conocer las condiciones exactas y el coste, el siguiente paso es contactar con el departamento de RRHH."
-    * **NO** digas "No he encontrado la información" si tienes la más mínima pista. Tu deber es ser el compañero más útil de la empresa.
-    * Solo si el CONTEXTO no contiene absolutamente nada relevante, responde: "He revisado toda la documentación interna y no he encontrado información sobre este tema. Para darte una respuesta precisa, lo mejor es que lo consultes directamente con el departamento de RRHH."
+1.  **BASE EN LA EVIDENCIA:** Basa tus respuestas **única y exclusivamente** en la información del CONTEXTO proporcionado. **NUNCA INVENTES NADA.**
+2.  **INTERPRETA Y AYUDA:** Infiere la necesidad real del usuario. Si preguntan "¿quién me ayuda?", busca en el CONTEXTO el contacto o procedimiento específico para su problema implícito.
+3.  **RESPUESTAS PRÁCTICAS:** Comunícate de forma natural. Usa listas, puntos clave o pasos a seguir. El objetivo es que el empleado sepa exactamente qué hacer.
+4.  **GESTIÓN DE INCERTIDUMBRE:** Si el CONTEXTO es parcial, di lo que sabes y guía al siguiente paso. Solo si el CONTEXTO está vacío, responde: "He revisado la documentación interna y no he encontrado información sobre este tema. Para una respuesta precisa, consulta directamente con RRHH."
+5.  **CLARIDAD Y CONCISIÓN:** Responde en **menos de 100 palabras** o un máximo de 5 puntos clave. Ve al grano.
+6.  **SIN RELLENO:** Evita frases como "Espero que esto ayude" o "Como modelo de IA...". Sé directo y profesional.
 
 **CONTEXTO (Información interna y verificada de Ciklum):**
 {context}
@@ -69,31 +62,39 @@ RAG_PROMPT_TEMPLATE_V3 = """
 **TU RESPUESTA (clara, práctica y basada 100% en el contexto):**
 """
 
-# --- Arquitectura de la Cadena de IA (Simplificada y Robusta) ---
-chain = None
+# --- Arquitectura de la Cadena de IA ---
 try:
-    llm = ChatOpenAI(model_name=MODEL_NAME, temperature=0.0, openai_api_base=BASE_URL, openai_api_key=API_KEY)
+    # === MEJORA 2: HARD-LIMIT DE TOKENS EN EL LLM ===
+    llm = ChatOpenAI(
+        model_name=MODEL_NAME,
+        temperature=0.0,
+        openai_api_base=BASE_URL,
+        openai_api_key=API_KEY,
+        max_tokens=350, # Límite para evitar respuestas demasiado largas
+        request_timeout=60 # Timeout para evitar esperas infinitas
+    )
     embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL_NAME, openai_api_base=BASE_URL, openai_api_key=API_KEY)
     vector_store = Chroma(persist_directory=PERSIST_DIRECTORY, embedding_function=embedder)
 
-    item_count = vector_store._collection.count()
-    logging.info(f"✅ La base de datos se ha cargado con {item_count} chunks.")
-    if item_count == 0:
-        logging.warning("ADVERTENCIA: La base de datos está vacía. Ejecuta build_index.py con los chunks pequeños.")
+    logging.info(f"✅ Base de datos cargada con {vector_store._collection.count()} chunks.")
 
-    # *** CAMBIO 1: CORRECCIÓN DEL BUG - ELIMINADO 'score_threshold' ***
-    # Este cambio soluciona el TypeError y evita que la app se caiga.
-    base_retriever = vector_store.as_retriever(search_kwargs={"k": 15})
+    # === MEJORA 3: RECUPERACIÓN AVANZADA (MMR + COMPRESIÓN EFICIENTE) ===
+    # 1. Usar MMR para obtener resultados diversos y evitar chunks redundantes del mismo documento.
+    base_retriever = vector_store.as_retriever(
+        search_type="mmr",
+        search_kwargs={"k": 12, "lambda_mult": 0.5, "fetch_k": 25} # lambda_mult: 0.5 es un buen balance entre relevancia y diversidad
+    )
     
+    # 2. Compresor en dos fases: Filtro rápido de embeddings + Extractor LLM para refinar.
+    embeddings_filter = EmbeddingsFilter(embeddings=embedder, similarity_threshold=0.78)
     document_compressor = LLMChainExtractor.from_llm(llm)
+    
     contextual_compression_retriever = ContextualCompressionRetriever(
-        base_compressor=document_compressor,
+        base_compressor=embeddings_filter | document_compressor, # Encadenar compresores
         base_retriever=base_retriever
     )
 
-    # *** CAMBIO 2: SIMPLIFICACIÓN - FORMATEO SIMPLE SIN FUENTES ***
     def format_docs(docs: List[Document]) -> str:
-        """Función simplificada para unir el contenido de los documentos."""
         return "\n\n".join(doc.page_content for doc in docs)
 
     contextualize_q_prompt = ChatPromptTemplate.from_messages([
@@ -105,39 +106,57 @@ try:
     history_aware_retriever = create_history_aware_retriever(llm, contextual_compression_retriever, contextualize_q_prompt)
 
     answer_generation_prompt = ChatPromptTemplate.from_messages([
-        ("system", RAG_PROMPT_TEMPLATE_V3),
+        ("system", RAG_PROMPT_V4),
         ("human", "{input}"),
     ])
 
-    # *** CAMBIO 3: CADENA MÁS LIMPIA Y DIRECTA ***
-    # La cadena ahora se enfoca en una única tarea: generar la mejor respuesta posible.
     rag_chain = (
         {
-            "context": history_aware_retriever | format_docs, 
+            "context": history_aware_retriever | format_docs,
             "input": RunnablePassthrough()
         }
         | answer_generation_prompt
         | llm
         | StrOutputParser()
     )
-    # Re-asignamos la clave 'input' del historial para que la cadena final la reciba
-    final_chain = RunnablePassthrough.assign(
-        answer=rag_chain
-    )
 
-    chain = final_chain
-    logging.info("✅ Arquitectura de IA Experta (v15) inicializada correctamente.")
+    # === MEJORA 4 (OPCIONAL): CAPA DE CONCISIÓN FINAL ===
+    # Esta cadena toma la respuesta de RAG y la fuerza a ser aún más corta.
+    # Aumenta ligeramente la latencia y el coste, pero garantiza la brevedad.
+    SHORTEN_PROMPT = ChatPromptTemplate.from_template(
+        "Resume la siguiente respuesta de un asistente de RRHH en menos de 100 palabras, manteniendo la terminología y los puntos clave. Sé directo y práctico.\n\nRESPUESTA ORIGINAL:\n{rag_answer}"
+    )
+    
+    conciseness_chain = SHORTEN_PROMPT | llm | StrOutputParser()
+
+    # === MEJORA 5: AÑADIR UN POST-AMBLE PARA GESTIONAR EXPECTATIVAS ===
+    def add_postamble(answer: str) -> str:
+        postamble = "\n\n*Respuesta generada por HRCiklum. Escribe 'detalles' si necesitas más información.*"
+        return answer.strip() + postamble
+
+    # Cadena final que une todo
+    final_chain = {
+        "rag_answer": rag_chain,
+    } | RunnablePassthrough.assign(
+        # Descomenta la siguiente línea para activar la capa de concisión
+        # answer=lambda x: conciseness_chain.invoke({"rag_answer": x["rag_answer"]})
+        # O usa esta línea para la respuesta directa de RAG
+        answer=RunnableLambda(lambda x: x["rag_answer"])
+    ) | RunnableLambda(lambda x: add_postamble(x['answer']))
+
+
+    logging.info("✅ Arquitectura de IA Experta (v16) inicializada correctamente.")
 
 except Exception as e:
     logging.critical(f"❌ FATAL: La cadena RAG no pudo inicializarse: {e}", exc_info=True)
-    chain = None
+    final_chain = None
 
 # --- Aplicación Web Flask ---
 app = Flask(__name__)
 
 @app.route("/chat", methods=["POST"])
 def handle_chat_event():
-    if not chain:
+    if not final_chain:
         return jsonify({"text": "Lo siento, el asistente no está disponible en este momento. Por favor, revisa los logs del servidor."}), 500
 
     data = request.json
@@ -151,14 +170,21 @@ def handle_chat_event():
     current_chat_history = chat_histories.get(session_id, [])
 
     try:
-        # La cadena ahora devuelve un diccionario con una sola clave: "answer"
-        result = chain.invoke({"input": user_input, "chat_history": current_chat_history})
-        answer = result["answer"]
+        # Si el usuario pide más detalles, podríamos invocar una cadena diferente
+        # o simplemente pasar la respuesta más larga (rag_answer)
+        if user_input.lower() == "detalles" and "last_rag_answer" in chat_histories.get(session_id, {}):
+             answer = chat_histories[session_id]["last_rag_answer"]
+        else:
+            result = final_chain.invoke({"input": user_input, "chat_history": current_chat_history})
+            answer = result # La cadena ahora devuelve directamente el string final
 
+        # Actualizar historial
         current_chat_history.extend([
             HumanMessage(content=user_input),
             AIMessage(content=answer)
         ])
+        # Guardar la última respuesta larga por si piden 'detalles'
+        # chat_histories[session_id] = {"history": current_chat_history[-10:], "last_rag_answer": result['rag_answer']}
         chat_histories[session_id] = current_chat_history[-10:]
 
         logging.info(f"Respuesta generada para '{session_id}': '{answer}'")
