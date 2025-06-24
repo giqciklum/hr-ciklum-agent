@@ -50,7 +50,7 @@ RAG_PROMPT_TEMPLATE = """
 
 **REGLAS DE ORO (INVIOLABLES):**
 1.  **IDIOMA:** Responde **siempre** en el mismo idioma de la PREGUNTA DEL USUARIO.
-2.  **TONO:** Sé amigable, profesional y servicial.
+2.  **TONO:** Sé amigable, profesional y muy servicial.
 3.  **BASE EN EL CONTEXTO:** Tu conocimiento se limita **estrictamente** al CONTEXTO. No inventes información.
 4.  **SI NO SABES, ESCALA:** Solo si después de seguir tu plan de razonamiento no encuentras una respuesta clara en el CONTEXTO, responde: "He revisado la documentación disponible, pero no he encontrado una respuesta directa a tu consulta. Para darte la información más precisa, te recomiendo que lo consultes directamente con el departamento de RRHH."
 
@@ -87,8 +87,8 @@ try:
 
     # *** CAMBIO 1: RETRIEVER SIMPLIFICADO Y FIABLE ***
     # Usamos el retriever base directamente para eliminar la inconsistencia del MultiQueryRetriever.
-    # Mantenemos k=15 para asegurar que tenga suficiente contexto para responder.
-    base_retriever = vector_store.as_retriever(search_kwargs={"k": 15})
+    # Mantenemos k=20 para asegurar que tenga suficiente contexto para responder.
+    base_retriever = vector_store.as_retriever(search_kwargs={"k": 20})
 
     def format_docs(docs: List[Document]) -> str:
         return "\n\n".join(doc.page_content for doc in docs)
