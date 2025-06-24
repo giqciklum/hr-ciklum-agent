@@ -1,9 +1,10 @@
-# app.py (v15 - Compatible con Extracción Semántica)
-# Objetivo: Adaptar el prompt para que aproveche al máximo la base de conocimiento
-# generada en formato de Preguntas y Respuestas (Q&A) por build_index.py.
+# app.py (v17 - Asistente Proactivo)
+# Objetivo: Utilizar un prompt avanzado que razona sobre una base de conocimiento
+# Q&A enriquecida, garantizando respuestas completas, prácticas y proactivas.
 
 import os
 import logging
+import threading
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from typing import List, Dict, Any
@@ -44,17 +45,27 @@ CONTEXTUALIZE_PROMPT_TEMPLATE = """
 Dada la siguiente conversación (chat_history) y la última pregunta del usuario (input), reformula la pregunta para que sea una pregunta independiente y clara que pueda entenderse sin el historial previo. No respondas a la pregunta, únicamente reformúlala.
 """
 
-# 2. Prompt Principal (v15 - Adaptado para Q&A)
+# 2. Prompt Principal (v17 - Proactivo y Enriquecido)
 RAG_PROMPT_TEMPLATE = """
-**TU MISIÓN:** Eres HRCiklum, un asistente de IA experto y muy preciso. Tu objetivo es responder a las preguntas de los empleados utilizando una base de conocimiento pre-procesada en formato de Preguntas y Respuestas (Q&A).
+**TU MISIÓN:** Eres HRCiklum, un asistente de IA experto, fiable y muy práctico para los empleados de Ciklum. Tu objetivo es proporcionar siempre la respuesta más completa y útil posible, basándote en la base de conocimiento en formato de Preguntas y Respuestas (Q&A) que se te proporciona en el CONTEXTO.
 
 **REGLAS DE ORO (INVIOLABLES):**
 1.  **IDIOMA:** Responde **siempre** en el mismo idioma de la PREGUNTA DEL USUARIO.
 2.  **TONO:** Sé amigable, profesional y servicial.
-3.  **FUNCIONAMIENTO INTERNO (MUY IMPORTANTE):** El CONTEXTO que se te proporciona NO es el texto original de los documentos. Es una lista de pares de Preguntas (P:) y Respuestas (R:) que ya ha sido generada por una IA. Tu única tarea es encontrar la pregunta (P:) en el CONTEXTO que mejor coincida con la PREGUNTA DEL USUARIO y devolver la respuesta (R:) correspondiente de la forma más natural posible.
-4.  **SÍNTESIS (si es necesario):** Si varias preguntas y respuestas del contexto son relevantes para la pregunta del usuario, puedes combinar el contenido de varias respuestas (R:) para crear una contestación más completa, pero siempre basándote en la información que contienen.
-5.  **SI NO ENCUENTRAS COINCIDENCIA, ESCALA:** Si ninguna de las preguntas (P:) en el CONTEXTO se parece a la pregunta del usuario, responde: "He revisado la documentación disponible, pero no he encontrado una respuesta directa a tu consulta. Para darte la información más precisa, te recomiendo que lo consultes directamente con el departamento de RRHH."
-6.  **NO INVENTES:** No añadas información que no esté en las respuestas (R:) del contexto. Limítate a presentar la información encontrada de una manera conversacional.
+3.  **BASE EN EL CONTEXTO:** Tu conocimiento se limita **estrictamente** al CONTEXTO. No inventes información.
+
+**PLAN DE RAZONAMIENTO AVANZADO (OBLIGATORIO):**
+Antes de responder, sigue estos pasos para asegurar la máxima calidad:
+
+1.  **BÚSQUEDA PRIMARIA:** Analiza la PREGUNTA DEL USUARIO y busca en el CONTEXTO si existe una pregunta (P:) que coincida directamente. Si la encuentras, usa su respuesta (R:) para formular tu contestación.
+
+2.  **BÚSQUEDA SECUNDARIA (SÍNTESIS INTELIGENTE):** Si no encuentras una pregunta (P:) que coincida directamente, **NO TE RINDAS**. Lee el contenido de **TODAS las respuestas (R:)** proporcionadas en el CONTEXTO. Tu deber es actuar como un analista de RRHH: sintetiza una respuesta coherente a la PREGUNTA DEL USUARIO utilizando la información que encuentres dispersa entre las diferentes respuestas.
+
+3.  **ENRIQUECIMIENTO PROACTIVO (REGLA CRÍTICA):** Al formular tu respuesta final, hazla lo más práctica posible. Si en la información que has encontrado (ya sea de una respuesta directa o de una síntesis) aparecen nombres de personas, sus roles, o datos de contacto, **DEBES INCLUIRLOS** en tu respuesta para que sea más útil. Si la pregunta es sobre una persona (p. ej., "¿Quién es Julio Luis?"), busca activamente su rol y responsabilidades en el contexto y explícalos de forma clara.
+
+4.  **GESTIÓN DE AMBIGÜEDAD:** Si la pregunta del usuario es genérica (p.ej., "¿quién me puede ayudar?"), no digas que no sabes. En su lugar, proporciona un resumen de los contactos clave para los problemas más comunes (RRHH, IT, Proyectos, etc.) basándote en la información del contexto.
+
+5.  **ESCALA SOLO COMO ÚLTIMO RECURSO:** Únicamente si después de seguir los pasos 1-4 no encuentras absolutamente ninguna información relevante para responder, entonces y solo entonces, usa esta respuesta: "He revisado la documentación disponible, pero no he encontrado una respuesta directa a tu consulta. Para darte la información más precisa, te recomiendo que lo consultes directamente con el departamento de RRHH."
 
 **CONTEXTO (Formato Q&A):**
 {context}
@@ -63,14 +74,24 @@ RAG_PROMPT_TEMPLATE = """
 **PREGUNTA DEL USUARIO (ya contextualizada con el historial):**
 {input}
 
-**TU RESPUESTA (basada en las 'R:' del contexto):**
+**TU RESPUESTA (siguiendo el Plan de Razonamiento Avanzado):**
 """
 
 # --- Arquitectura de la Cadena de IA (Simplificada y Robusta) ---
 chain = None
+
+def warm_up_llm(llm_instance):
+    """Sends a dummy request to the LLM to warm it up and reduce first-query latency."""
+    try:
+        logging.info("🚀 Iniciando el pre-calentamiento del LLM en segundo plano...")
+        llm_instance.invoke("Hola")
+        logging.info("✅ El LLM está caliente y listo para responder.")
+    except Exception as e:
+        logging.warning(f"⚠️ El pre-calentamiento del LLM ha fallado (esto no es crítico): {e}")
+
 try:
-    llm = ChatOpenAI(model_name=MODEL_NAME, temperature=0.0, openai_api_base=BASE_URL, openai_api_key=API_KEY)
-    embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL_NAME, openai_api_base=BASE_URL, openai_api_key=API_KEY)
+    llm = ChatOpenAI(model=MODEL_NAME, temperature=0.0, openai_api_base=BASE_URL, openai_api_key=API_KEY)
+    embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL_NAME, openai_api_base=API_BASE, openai_api_key=API_KEY)
 
     vector_store = Chroma(persist_directory=PERSIST_DIRECTORY, embedding_function=embedder)
 
@@ -79,8 +100,7 @@ try:
     if item_count == 0:
         logging.warning("ADVERTENCIA: La base de datos se ha cargado pero está vacía.")
 
-    # El retriever ahora buscará en un espacio de Q&A, por lo que los resultados serán más precisos.
-    base_retriever = vector_store.as_retriever(search_kwargs={"k": 10}) # k=10 es un buen punto de partida para Q&A
+    base_retriever = vector_store.as_retriever(search_kwargs={"k": 15})
 
     def format_docs(docs: List[Document]) -> str:
         return "\n\n".join(doc.page_content for doc in docs)
@@ -115,7 +135,11 @@ try:
     )
 
     chain = rag_chain
-    logging.info("✅ Arquitectura de IA Conversacional (v15 - Semántica) inicializada correctamente.")
+    logging.info("✅ Arquitectura de IA Conversacional (v17 - Proactiva) inicializada correctamente.")
+
+    # Inicia el pre-calentamiento en un hilo separado para no bloquear el inicio de la app.
+    warm_up_thread = threading.Thread(target=warm_up_llm, args=(llm,))
+    warm_up_thread.start()
 
 except Exception as e:
     logging.critical(f"❌ FATAL: La cadena RAG no pudo inicializarse: {e}", exc_info=True)

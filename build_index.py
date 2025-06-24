@@ -1,9 +1,9 @@
-# build_index.py  ─── Versión 2025-06-21 (Extracción Semántica Avanzada)
+# build_index.py  ─── Versión 2025-06-22 (Extracción Exhaustiva Multimodal)
 """
-Reconstruye el índice vectorial utilizando una técnica de extracción semántica.
-En lugar de indexar texto plano, un LLM analiza cada documento y lo convierte
-en un conjunto detallado de Preguntas y Respuestas (Q&A) para crear una base de
-conocimiento más rica y contextual.
+Reconstruye el índice vectorial utilizando una técnica de extracción multimodal y semántica.
+Para cada documento, un LLM avanzado analiza su contenido visual y textual para generar
+una base de conocimiento en formato Q&A extremadamente detallada y precisa.
+Este enfoque asegura la captura de tablas, diagramas y datos contextuales.
 """
 
 from __future__ import annotations
@@ -13,16 +13,18 @@ import re
 import glob
 import json
 import shutil
+import base64
 import fitz  # PyMuPDF
 import pptx
-import docx # Para Word
-import openpyxl # Para Excel
+import docx
+import openpyxl
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from io import BytesIO
 from typing import List
 
 from tqdm import tqdm
 from PIL import Image
+from pdf2image import convert_from_path
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.schema.messages import HumanMessage, SystemMessage
@@ -31,12 +33,12 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 # ── Configuración global ────────────────────────────────────────────────────
 load_dotenv()
-QA_GENERATION_MODEL = "gpt-4o"
+VISION_MODEL = "gpt-4o"
 EMBEDDING_MODEL = "text-embedding-3-large"
 DOCS_FOLDER = "docs"
 CACHE_DIR = ".cache/doc_cache"
 PERSIST_DIR = "chroma_db"
-CHUNK_SIZE = 2048  # Ajustado para Q&A
+CHUNK_SIZE = 2048
 CHUNK_OVERLAP = 100
 MAX_WORKERS = min(os.cpu_count() or 4, 4)
 
@@ -44,29 +46,28 @@ API_BASE = "https://genai-gateway.azure-api.net/"
 API_KEY = os.getenv("OPENAI_API_KEY")
 
 # ── Modelos ────────────────────────────────────────────────────────────────
-qa_llm = ChatOpenAI(model=QA_GENERATION_MODEL, openai_api_base=API_BASE, openai_api_key=API_KEY, max_tokens=4096, temperature=0.1)
+# Usamos una temperatura ligeramente superior para fomentar una generación de Q&A más rica.
+llm = ChatOpenAI(model=VISION_MODEL, openai_api_base=API_BASE, openai_api_key=API_KEY, max_tokens=4096, temperature=0.1)
 embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL, openai_api_base=API_BASE, openai_api_key=API_KEY)
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
 
-# ── Plantilla de Prompt para la Extracción Semántica ────────────────────────
+# ── Plantilla de Prompt Mejorada para la Extracción Semántica ────────────────
 QA_SYSTEM_PROMPT = """
-Eres un experto en gestión del conocimiento corporativo. Tu misión es leer el siguiente documento y transformarlo en un formato de Preguntas y Respuestas (Q&A) muy completo.
-El objetivo es crear una base de conocimiento que un asistente de IA utilizará para responder a las preguntas de los empleados.
+Eres un experto en extracción de conocimiento. Tu misión es analizar el contenido de un documento (proporcionado como texto y/o imágenes) y transformarlo en un formato de Preguntas y Respuestas (Q&A) exhaustivo.
 
-**Instrucciones:**
-1.  **Analiza el Contenido:** Lee el texto completo del documento que te proporcionaré.
-2.  **Identifica Conceptos Clave:** Extrae cada política, procedimiento, regla, beneficio, contacto, fecha límite, y cualquier otro dato importante.
-3.  **Genera Pares de Q&A:** Para cada concepto clave, formula una pregunta clara y específica que un empleado podría hacer, y proporciona una respuesta detallada y completa basada únicamente en la información del texto.
-4.  **Formato de Salida:** Presenta el resultado como una lista de preguntas y respuestas. Usa el siguiente formato para cada par:
+**Instrucciones Clave:**
+1.  **Análisis Integral:** Analiza todo el contenido, incluyendo texto, tablas, listas y la estructura del documento.
+2.  **Perspectiva del Empleado:** Genera preguntas desde la perspectiva de un empleado de Ciklum. Piensa en todas las dudas que podrían surgir.
+3.  **Exhaustividad:** No dejes ningún dato fuera. Cada política, procedimiento, nombre, rol, contacto, fecha límite o dato en una tabla debe convertirse en al menos un par de Q&A.
+4.  **Respuestas Completas:** Las respuestas (R:) deben ser detalladas y contener toda la información relevante del documento para esa pregunta específica. Si una respuesta incluye un nombre, debe incluir también su rol si se menciona.
+5.  **Formato de Salida Obligatorio:** Usa estrictamente este formato para cada par:
 
-    P: [Pregunta del empleado]
-    R: [Respuesta detallada]
+    P: [Pregunta clara y concisa del empleado]
+    R: [Respuesta detallada y autocontenida]
 
-**Ejemplo:**
-P: ¿Cuántos días de vacaciones anuales tengo?
-R: En Ciklum, tienes derecho a 23 días laborables de vacaciones al año. Estos días deben ser utilizados antes del 31 de marzo del año siguiente al que se generaron.
-
-Asegúrate de ser exhaustivo y de que cada respuesta contenga toda la información relevante del documento para esa pregunta específica.
+**Ejemplo de una buena extracción:**
+P: ¿Quién es el responsable de la prevención de riesgos laborales y qué debo hacer al respecto?
+R: Julio Luis Jimenez Saenz es quien se encarga de la Salud en el trabajo y la Prevención de Riesgos Laborales. Al empezar, recibirás un correo de Preventiam para realizar una formación online de 120 minutos. También recibirás un correo de Docusign para firmar la documentación y aceptar o rechazar el examen médico voluntario.
 """
 
 # ── Utilidades ─────────────────────────────────────────────────────────────
@@ -74,137 +75,144 @@ def extract_year(filename: str) -> int | None:
     m = re.compile(r"(20\d{2})").search(filename)
     return int(m.group(1)) if m else None
 
-def generate_qa_from_text(text: str, filename: str) -> str:
-    """Usa un LLM para convertir un bloque de texto en Q&A detallado."""
-    if not text.strip():
+def generate_qa_from_content(content: List, filename: str) -> str:
+    """Usa un LLM para convertir contenido (texto y/o imágenes) en Q&A."""
+    if not content:
         return ""
     try:
-        print(f"Generando Q&A para {filename}...")
-        resp = qa_llm.invoke([
+        print(f"INFO: Generando Q&A para '{filename}'...")
+        messages = [
             SystemMessage(content=QA_SYSTEM_PROMPT),
-            HumanMessage(content=f"Aquí está el contenido del documento '{filename}':\n\n---\n\n{text}")
-        ])
+            HumanMessage(content=content)
+        ]
+        resp = llm.invoke(messages)
         return resp.content.strip()
     except Exception as e:
-        print(f"⚠️ Error generando Q&A para {filename}: {e}")
+        print(f"⚠️  ERROR: No se pudo generar Q&A para '{filename}': {e}")
         return ""
 
-# ── Extracción de textos (simplificada para obtener el texto completo) ───────
+# ── Extracción de Contenido por Tipo de Fichero ─────────────────────────────
 
-def extract_text_from_pdf(path: str) -> str:
-    """Extrae todo el texto de un PDF."""
-    full_text = []
-    with fitz.open(path) as doc:
-        for page in doc:
-            full_text.append(page.get_text("text").strip())
-    return "\n\n".join(full_text)
+def get_content_from_pdf(path: str) -> List:
+    """Extrae contenido multimodal de cada página de un PDF."""
+    content = [{"type": "text", "text": "Analiza el siguiente documento PDF y extrae su contenido en formato Q&A. El documento trata sobre el onboarding de Ciklum."}]
+    try:
+        images = convert_from_path(path)
+        for i, image in enumerate(images):
+            buffer = BytesIO()
+            image.save(buffer, format="PNG")
+            img_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+            content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}})
+            print(f"INFO: Procesada página {i+1} de '{os.path.basename(path)}' como imagen.")
+    except Exception as e:
+        print(f"⚠️  ADVERTENCIA: Falló la conversión de PDF a imagen para '{path}'. Se usará solo texto. Error: {e}")
+        text = ""
+        with fitz.open(path) as doc:
+            for page in doc:
+                text += page.get_text() + "\n\n"
+        content.append({"type": "text", "text": text})
+    return content
 
-def extract_text_from_pptx(path: str) -> str:
-    """Extrae todo el texto de una presentación de PowerPoint."""
+def get_content_from_pptx(path: str) -> List:
+    """Extrae texto de una presentación de PowerPoint."""
     prs = pptx.Presentation(path)
     full_text = []
-    for slide in prs.slides:
-        slide_text = "\n".join(
-            [sh.text for sh in slide.shapes if getattr(sh, "text", "")]
+    for i, slide in enumerate(prs.slides):
+        slide_title = f"--- Diapositiva {i+1} ---"
+        slide_text_content = "\n".join(
+            [shape.text for shape in slide.shapes if shape.has_text_frame]
         ).strip()
-        if slide_text:
-            full_text.append(slide_text)
-    return "\n\n".join(full_text)
+        if slide_text_content:
+            full_text.append(f"{slide_title}\n{slide_text_content}")
+    return [{"type": "text", "text": "\n\n".join(full_text)}]
 
-def extract_text_from_docx(path: str) -> str:
-    """Extrae todo el texto de un documento de Word."""
+def get_content_from_docx(path: str) -> List:
+    """Extrae texto de un documento de Word."""
     doc = docx.Document(path)
-    return "\n".join([para.text for para in doc.paragraphs])
+    full_text = "\n".join([para.text for para in doc.paragraphs])
+    return [{"type": "text", "text": full_text}]
 
-def extract_text_from_xlsx(path: str) -> str:
-    """Extrae texto de todas las hojas de un fichero Excel."""
-    workbook = openpyxl.load_workbook(path)
+def get_content_from_xlsx(path: str) -> List:
+    """Extrae texto de todas las hojas de un fichero Excel, preservando la estructura."""
+    workbook = openpyxl.load_workbook(path, data_only=True)
     full_text = []
     for sheetname in workbook.sheetnames:
         sheet = workbook[sheetname]
-        sheet_text = "\n".join(
-            [",".join([str(cell.value) for cell in row if cell.value is not None]) for row in sheet.iter_rows()]
-        )
-        if sheet_text:
-            full_text.append(f"--- Hoja: {sheetname} ---\n{sheet_text}")
-    return "\n\n".join(full_text)
+        table_markdown = f"### Hoja: {sheetname}\n\n"
+        rows = list(sheet.iter_rows())
+        if not rows:
+            continue
+        # Crear cabecera para markdown
+        header = [str(cell.value) if cell.value is not None else "" for cell in rows[0]]
+        table_markdown += "| " + " | ".join(header) + " |\n"
+        table_markdown += "| " + " | ".join(["---"] * len(header)) + " |\n"
+        # Añadir filas
+        for row in rows[1:]:
+            row_data = [str(cell.value) if cell.value is not None else "" for cell in row]
+            table_markdown += "| " + " | ".join(row_data) + " |\n"
+        full_text.append(table_markdown)
+    return [{"type": "text", "text": "\n\n".join(full_text)}]
 
-def extract_text_from_image(path: str) -> str:
-    """Usa GPT-4o Vision para extraer texto de una imagen."""
-    try:
-        with open(path, "rb") as f:
-            img_bytes = f.read()
-        b64_image = base64.b64encode(img_bytes).decode('utf-8')
-        vision_llm = ChatOpenAI(model="gpt-4o", openai_api_base=API_BASE, openai_api_key=API_KEY, max_tokens=2048)
-        resp = vision_llm.invoke([
-            HumanMessage(
-                content=[
-                    {"type": "text", "text": "Extrae todo el texto de esta imagen en el formato original."},
-                    {"type": "image_url", "image_url": f"data:image/jpeg;base64,{b64_image}"}
-                ]
-            )
-        ])
-        return resp.content.strip()
-    except Exception as e:
-        print(f"⚠️ Error procesando imagen {os.path.basename(path)}: {e}")
-        return ""
+def get_content_from_image(path: str) -> List:
+    """Prepara una imagen para el análisis de visión."""
+    with open(path, "rb") as f:
+        img_bytes = f.read()
+    img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+    return [
+        {"type": "text", "text": "Analiza esta imagen y extrae su contenido en formato Q&A."},
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
+    ]
 
 # ── Procesamiento de ficheros con la nueva lógica ───────────────────────────
 
 def process_file(path: str) -> tuple[list[str], list[dict]]:
     basename = os.path.basename(path)
-    cache_f = os.path.join(CACHE_DIR, basename + ".semantic.json")
+    cache_f = os.path.join(CACHE_DIR, basename + ".semantic_v2.json")
     
-    # Comprobar si existe un caché válido
     if os.path.exists(cache_f) and os.path.getmtime(cache_f) > os.path.getmtime(path):
         with open(cache_f, encoding="utf-8") as f:
             cache = json.load(f)
         return cache["texts"], cache["metadatas"]
 
-    # Extraer el texto en bruto del fichero
-    ext = path.lower().split('.')[-1]
-    raw_text = ""
-    if ext == "pdf":
-        raw_text = extract_text_from_pdf(path)
-    elif ext == "pptx":
-        raw_text = extract_text_from_pptx(path)
-    elif ext == "docx":
-        raw_text = extract_text_from_docx(path)
-    elif ext == "xlsx":
-        raw_text = extract_text_from_xlsx(path)
-    elif ext in ["png", "jpg", "jpeg"]:
-        raw_text = extract_text_from_image(path)
+    ext = os.path.splitext(path)[1].lower()
+    content_payload = []
+    if ext == ".pdf":
+        content_payload = get_content_from_pdf(path)
+    elif ext == ".pptx":
+        content_payload = get_content_from_pptx(path)
+    elif ext == ".docx":
+        content_payload = get_content_from_docx(path)
+    elif ext == ".xlsx":
+        content_payload = get_content_from_xlsx(path)
+    elif ext in [".png", ".jpg", ".jpeg"]:
+        content_payload = get_content_from_image(path)
 
-    if not raw_text.strip():
+    if not content_payload:
         return [], []
 
-    # Generar el contenido semántico (Q&A)
-    qa_content = generate_qa_from_text(raw_text, basename)
+    qa_content = generate_qa_from_content(content_payload, basename)
     if not qa_content:
         return [], []
         
-    # Dividir el contenido Q&A en chunks y preparar metadatos
     chunks = text_splitter.split_text(qa_content)
     metadatas = [{"source": basename, "doc_year": extract_year(basename)} for _ in chunks]
     
-    # Guardar el resultado en caché
     if chunks:
         with open(cache_f, "w", encoding="utf-8") as f:
-            json.dump({"texts": chunks, "metadatas": metadatas}, f, ensure_ascii=False)
+            json.dump({"texts": chunks, "metadatas": metadatas}, f, ensure_ascii=False, indent=2)
             
     return chunks, metadatas
 
 # ── Main ───────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("── Construyendo índice vectorial con Extracción Semántica (Q&A) ──")
+    print("── Construyendo índice con Extracción Semántica Exhaustiva (Multimodal) ──")
     os.makedirs(CACHE_DIR, exist_ok=True)
 
     extensions_to_process = ("*.pdf", "*.pptx", "*.docx", "*.xlsx", "*.png", "*.jpg", "*.jpeg")
-    files = [f for ext in extensions_to_process for f in glob.glob(os.path.join(DOCS_FOLDER, ext))]
+    files = [f for ext in extensions_to_process for f in glob.glob(os.path.join(DOCS_FOLDER, f"**/{ext}", recursive=True))]
     print(f"Se encontraron {len(files)} documentos. Procesando con {MAX_WORKERS} workers…")
     
     all_texts, all_metas = [], []
-    # Nota: El procesamiento con LLMs puede ser más lento. Se mantiene el pool para I/O.
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as pool:
         futs = {pool.submit(process_file, fp): fp for fp in files}
         for fut in tqdm(as_completed(futs), total=len(futs), desc="Documentos"):
@@ -214,13 +222,16 @@ if __name__ == "__main__":
                 all_texts.extend(texts)
                 all_metas.extend(metas)
             except Exception as e:
-                print(f"❌ Error procesando {fp}: {e}")
+                print(f"❌ ERROR FATAL procesando {fp}: {e}")
 
     if os.path.exists(PERSIST_DIR):
+        print(f"INFO: Eliminando directorio de índice antiguo: {PERSIST_DIR}")
         shutil.rmtree(PERSIST_DIR)
 
     if all_texts:
+        print(f"INFO: Creando nuevo índice vectorial con {len(all_texts)} chunks semánticos...")
         Chroma.from_texts(all_texts, embedder, metadatas=all_metas, persist_directory=PERSIST_DIR)
-        print(f"✅ Índice vectorial creado con {len(all_texts)} chunks semánticos.")
+        print("✅ ¡Índice vectorial creado con éxito!")
     else:
-        print("❌ Sin contenido indexado. Comprueba los documentos o los logs de error.")
+        print("❌ ADVERTENCIA: No se generó contenido para indexar. Revisa los documentos y los logs.")
+
