@@ -205,5 +205,3 @@ if __name__ == "__main__":
 
     print(f"\nSe generaron e indexaron un total de {total_chunks} chunks semánticos.")
     print(f"✅ Índice vectorial creado con éxito en '{PERSIST_DIR}'.")
-    db.persist()
-    print("Base de datos guardada en disco.")
