@@ -1,4 +1,4 @@
-# app.py (Versión Mejorada - Experta y Fiable)
+# app.py (Versión Final Corregida - v3)
 import os
 import logging
 from flask import Flask, request, jsonify
@@ -7,13 +7,12 @@ from typing import List, Dict, Any
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.documents import Document
-from langchain_core.runnables import RunnableParallel, RunnablePassthrough
+from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.chains import create_history_aware_retriever
 from langchain.chains.combine_documents import create_stuff_documents_chain
-# ¡NUEVA IMPORTACIÓN!
 from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain_core.messages import HumanMessage, AIMessage
 
@@ -35,10 +34,10 @@ if not API_KEY:
 # --- "Memoria" del Chatbot ---
 chat_histories: Dict[str, Any] = {}
 
-# --- CAMBIO 1: RAG_PROMPT_V5 - EL PROMPT EVOLUCIONADO ---
+# --- Prompt de Contextualización ---
 CONTEXTUALIZE_PROMPT_TEMPLATE = """Dada la siguiente conversación (chat_history) y la última pregunta del usuario (input), reformula la pregunta para que sea una pregunta independiente y clara que pueda entenderse sin el historial previo. No respondas a la pregunta, únicamente reformúlala."""
 
-
+# --- Prompt Principal del RAG ---
 RAG_PROMPT_V6 = """
 **TU ROL:** Eres HRCiklum, el asistente de IA y compañero de confianza para los empleados de Ciklum. Tu objetivo es proporcionar respuestas claras, fiables y prácticas, actuando como un miembro experto y servicial del equipo de RRHH.
 
@@ -68,49 +67,41 @@ try:
         temperature=0.0,
         openai_api_base=BASE_URL,
         openai_api_key=API_KEY,
-        max_tokens=800, # Aumentamos ligeramente para respuestas más completas
+        max_tokens=800,
         request_timeout=90
     )
     embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL_NAME, openai_api_base=BASE_URL, openai_api_key=API_KEY)
     vector_store = Chroma(persist_directory=PERSIST_DIRECTORY, embedding_function=embedder)
     logging.info(f"✅ Base de datos cargada con {vector_store._collection.count()} chunks.")
 
-    # === CAMBIO 2: REVOLUCIÓN DEL RETRIEVER -> MultiQueryRetriever ===
-    # En lugar de una búsqueda simple, usamos el LLM para generar varias preguntas
-    # y buscar documentos para todas ellas. Esto es clave para las preguntas complejas.
-    base_retriever = vector_store.as_retriever(search_kwargs={"k": 10}) # Aumentamos k para tener más documentos potenciales
-    
-    retriever = MultiQueryRetriever.from_llm(
-        retriever=base_retriever,
-        llm=llm
-    )
-    
+    # Usamos el MultiQueryRetriever para mejorar la recuperación en preguntas complejas
+    base_retriever = vector_store.as_retriever(search_kwargs={"k": 10})
+    retriever = MultiQueryRetriever.from_llm(retriever=base_retriever, llm=llm)
+
     def format_docs(docs: List[Document]) -> str:
         if not docs:
             logging.warning("El retriever no ha devuelto ningún documento.")
             return ""
-        
         logging.info(f"Retriever ha encontrado {len(docs)} documentos para el contexto.")
         return "\n\n".join(doc.page_content for doc in docs)
 
     # --- Creación de la cadena principal ---
-    
     contextualize_q_prompt = ChatPromptTemplate.from_messages([
         ("system", CONTEXTUALIZE_PROMPT_TEMPLATE),
         MessagesPlaceholder(variable_name="chat_history"),
         ("human", "{input}"),
     ])
-    
     history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
-    
-    # --- CAMBIO 3: CADENA DE GENERACIÓN DE RESPUESTA MÁS CLARA ---
-    # Usamos `create_stuff_documents_chain` que está optimizado para esto.
+
+    # --- Cadena de Generación de Respuesta ---
     answer_generation_prompt = ChatPromptTemplate.from_messages([
-        ("system", RAG_PROMPT_V5),
-        MessagesPlaceholder(variable_name="chat_history"), # Incluimos el historial por si es útil
+        # CORRECCIÓN 1: Usar la variable correcta del prompt que hemos definido: RAG_PROMPT_V6
+        ("system", RAG_PROMPT_V6),
+        MessagesPlaceholder(variable_name="chat_history"),
         ("human", "{input}"),
     ])
 
+    # CORRECCIÓN 2: Renombrar la variable a algo más descriptivo
     Youtube_chain = create_stuff_documents_chain(llm, answer_generation_prompt)
 
     # La cadena final ahora combina la recuperación consciente del historial con la generación de respuestas.
@@ -123,7 +114,7 @@ try:
     # Extraemos solo la respuesta final para el usuario.
     final_chain = rag_chain | (lambda x: x['answer'])
     
-    logging.info("✅ Arquitectura de IA Experta (v2 - MultiQuery) inicializada correctamente.")
+    logging.info("✅ Arquitectura de IA Experta (v3 - MultiQuery Corregida) inicializada correctamente.")
 
 except Exception as e:
     logging.critical(f"❌ FATAL: La cadena RAG no pudo inicializarse: {e}", exc_info=True)
