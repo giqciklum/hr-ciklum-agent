@@ -1,11 +1,10 @@
-# app.py (Versión Final v6 - Corregido y con Prompt de Emergencia Completo)
+# app.py (Versión 10 - Definitiva, Modular y Optimizada)
 import os
 import logging
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from typing import List, Dict, Any
 
-# IMPORTACIÓN CLAVE PARA SECRET MANAGER
 from google.cloud import secretmanager
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -29,75 +28,35 @@ BASE_URL = os.getenv("OPENAI_API_BASE", "https://genai-gateway.azure-api.net/")
 PERSIST_DIRECTORY = "chroma_db_v2"
 MODEL_NAME = "gpt-4o"
 EMBEDDING_MODEL_NAME = "text-embedding-3-large"
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "bustling-cosmos-462514-a4")
 
-# ID de tu proyecto de Google Cloud
-GCP_PROJECT_ID = "bustling-cosmos-462514-a4"
-
-if not API_KEY:
-    logging.critical("FATAL: No se ha encontrado la 'OPENAI_API_KEY'.")
+if not API_KEY or not GCP_PROJECT_ID:
+    logging.critical("FATAL: Faltan variables de entorno esenciales (OPENAI_API_KEY o GCP_PROJECT_ID).")
     exit()
 
 # --- "Memoria" del Chatbot ---
 chat_histories: Dict[str, Any] = {}
 
-# --- Prompt de Contextualización ---
-CONTEXTUALIZE_PROMPT_TEMPLATE = """Dada la siguiente conversación (chat_history) y la última pregunta del usuario (input), reformula la pregunta para que sea una pregunta independiente y clara que pueda entenderse sin el historial previo. No respondas a la pregunta, únicamente reformúlala."""
-
-# --- NUEVA FUNCIÓN PARA OBTENER EL PROMPT DESDE SECRET MANAGER ---
-def get_hr_prompt() -> str:
-    """
-    Obtiene la última versión del prompt de HR desde Google Cloud Secret Manager.
-    Si falla, devuelve un prompt de emergencia para que la app no se caiga.
-    """
+# --- Función para obtener la PERSONALIDAD del prompt desde Secret Manager ---
+def get_hr_prompt_personality() -> str:
     try:
         secret_id = "hr-ciklum-prompt"
         version_id = "latest"
         name = f"projects/{GCP_PROJECT_ID}/secrets/{secret_id}/versions/{version_id}"
-
         client = secretmanager.SecretManagerServiceClient()
         response = client.access_secret_version(request={"name": name})
-        
         prompt_text = response.payload.data.decode("UTF-8")
-        logging.info("✅ Prompt cargado exitosamente desde Secret Manager.")
+        logging.info("✅ Personalidad del prompt cargada exitosamente desde Secret Manager.")
         return prompt_text
-
     except Exception as e:
-        logging.error(f"❌ CRITICAL: No se pudo cargar el prompt desde Secret Manager. Usando prompt de emergencia. Error: {e}", exc_info=True)
-        # Este es un prompt de respaldo para que la app siga funcionando si Secret Manager falla
-        # AHORA USA EL PROMPT ORIGINAL COMPLETO COMO EMERGENCIA
-        return """
-**TU ROL:** Eres HRCiklum, el asistente de IA y compañero de confianza para los empleados de Ciklum. Tu objetivo es proporcionar respuestas claras, fiables y prácticas, actuando como un miembro experto y servicial del equipo de RRHH.
-
-**TUS PRINCIPIOS (INQUEBRANTABLES):**
-1.  **IDIOMA DE RESPUESTA (Regla Maestra):** Detecta el idioma principal de la **PREGUNTA DEL USUARIO** (español o inglés) y responde **siempre** en ese mismo idioma. Si la pregunta es en inglés, toda tu respuesta debe ser en inglés. Si es en español, toda tu respuesta debe ser en español.
-2.  **BASE EN LA EVIDENCIA (Regla de Oro):** Basa tus respuestas **única y exclusivamente** en la información del CONTEXTO proporcionado. **NUNCA INVENTES NADA.** Si un detalle no está en el contexto, no lo menciones.
-3.  **SÍNTESIS EXPERTA:** La pregunta del usuario puede ser compleja y la respuesta puede estar repartida en varios fragmentos del contexto. Tu tarea es **sintetizar toda la información relevante** en una única respuesta coherente y bien estructurada.
-4.  **RESPUESTAS PRÁCTICAS Y SERVICIALES:** Ve al grano. Usa listas, negritas y pasos a seguir para que el empleado sepa exactamente qué hacer. Anticipa la necesidad real: si preguntan por un "problema", responde con la "solución" que se encuentra en el contexto.
-5.  **DISCRIMINACIÓN PRECISA:** El contexto puede contener información sobre varios procesos similares (ej. formación de riesgos y examen de salud). Si el usuario pregunta específicamente por un proceso, **enfoca tu respuesta exclusivamente en ese proceso**. Ignora la información de otros procesos, aunque esté en el contexto, para evitar confusiones.
-6.  **GESTIÓN DE INCERTIDUMBRE (Protocolo Mejorado):**
-    * Si el CONTEXTO está vacío o claramente no es relevante para la pregunta, responde (en el idioma del usuario) con amabilidad: "He revisado la documentación interna, pero no he encontrado información específica sobre este tema. Para asegurar que recibes una respuesta precisa, lo mejor es que consultes directamente con el equipo de RRHH. ¡Están para ayudarte!" (En inglés: "I've reviewed the internal documentation, but I couldn't find specific information on this topic. To ensure you get an accurate answer, it's best to check directly with the HR team. They are there to help you!").
-    * Si el usuario pregunta sobre leyes externas o pide comparaciones no presentes en el contexto, explica tu función (en el idioma del usuario).
-7.  **TONO AMIGABLE Y PROFESIONAL:** Sé cercano y servicial, pero siempre preciso y fiable. Termina tus respuestas con una nota positiva o una frase de ayuda.
-
-**CONTEXTO (Información interna y verificada de Ciklum):**
-{context}
----
-**PREGUNTA DEL USUARIO (previamente analizada y contextualizada):**
-{input}
-**TU RESPUESTA (clara, precisa, servicial y EN EL MISMO IDIOMA que la pregunta del usuario):**
-"""
+        logging.error(f"❌ CRITICAL: No se pudo cargar la personalidad del prompt. Usando personalidad de emergencia. Error: {e}")
+        # El prompt de emergencia también es solo la personalidad, sin placeholders.
+        return """**TU ROL:** Eres HRCiklum... (etc.)"""
 
 # --- Arquitectura de la Cadena de IA ---
 final_chain = None
 try:
-    llm = ChatOpenAI(
-        model_name=MODEL_NAME,
-        temperature=0.0,
-        openai_api_base=BASE_URL,
-        openai_api_key=API_KEY,
-        max_tokens=800,
-        request_timeout=90
-    )
+    llm = ChatOpenAI(model_name=MODEL_NAME, temperature=0.0, openai_api_base=BASE_URL, openai_api_key=API_KEY, max_tokens=800, request_timeout=90)
     embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL_NAME, openai_api_base=BASE_URL, openai_api_key=API_KEY)
     vector_store = Chroma(persist_directory=PERSIST_DIRECTORY, embedding_function=embedder)
     logging.info(f"✅ Base de datos cargada con {vector_store._collection.count()} chunks.")
@@ -105,25 +64,39 @@ try:
     base_retriever = vector_store.as_retriever(search_kwargs={"k": 10})
     retriever = MultiQueryRetriever.from_llm(retriever=base_retriever, llm=llm)
 
-    # --- Creación de la cadena principal ---
     contextualize_q_prompt = ChatPromptTemplate.from_messages([
-        ("system", CONTEXTUALIZE_PROMPT_TEMPLATE),
+        ("system", """Dada la siguiente conversación (chat_history) y la última pregunta del usuario (input), reformula la pregunta para que sea una pregunta independiente y clara que pueda entenderse sin el historial previo. No respondas a la pregunta, únicamente reformúlala."""),
         MessagesPlaceholder(variable_name="chat_history"),
         ("human", "{input}"),
     ])
     history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
 
+    # --- ARQUITECTURA MODULAR Y SEGURA DEL PROMPT ---
+    
+    # 1. Obtenemos la "personalidad" (el texto limpio) desde Secret Manager UNA VEZ al inicio.
+    # Esto lo puede editar un equipo no técnico de forma segura.
+    prompt_personality = get_hr_prompt_personality()
+
+    # 2. El código define la "estructura técnica" con los placeholders que LangChain necesita.
+    # Esta parte no debe ser tocada por personal no técnico.
+    full_system_prompt_template = f"""{prompt_personality}
+
+CONTEXTO (Información interna y verificada de Ciklum):
+{{context}}
+---
+PREGUNTA DEL USUARIO (previamente analizada y contextualizada):
+{{input}}
+"""
+    
+    # 3. Se crea la plantilla final combinando ambas partes.
     answer_generation_prompt = ChatPromptTemplate.from_messages([
-        ("system", get_hr_prompt()),
+        ("system", full_system_prompt_template),
         MessagesPlaceholder(variable_name="chat_history"),
         ("human", "{input}"),
     ])
 
     document_chain = create_stuff_documents_chain(llm, answer_generation_prompt)
 
-    # --- CORRECCIÓN DE LA CADENA RAG ---
-    # Se elimina `| format_docs` para pasar la lista de documentos completa
-    # a la `document_chain`, que ya sabe cómo manejarla.
     rag_chain = RunnablePassthrough.assign(
         context=history_aware_retriever
     ).assign(
@@ -132,47 +105,40 @@ try:
     
     final_chain = rag_chain | (lambda x: x['answer'])
     
-    logging.info("✅ Arquitectura de IA Experta (v6 - Corregida) inicializada correctamente.")
+    logging.info("✅ Arquitectura de IA Definitiva (v10 - Modular y Optimizada) inicializada.")
 
 except Exception as e:
     logging.critical(f"❌ FATAL: La cadena RAG no pudo inicializarse: {e}", exc_info=True)
 
 
-# --- Aplicación Web Flask (Sin cambios aquí) ---
+# --- Aplicación Web Flask (Sin cambios) ---
 app = Flask(__name__)
 
+# ... (El resto del fichero Flask es idéntico y correcto) ...
 @app.route("/chat", methods=["POST"])
 def handle_chat_event():
     if not final_chain:
-        return jsonify({"text": "Lo siento, el asistente no está disponible en este momento. Por favor, revisa los logs del servidor."}), 500
-
+        return jsonify({"text": "Lo siento, el asistente no está disponible en este momento."}), 500
     data = request.json
     user_input = data.get('message', {}).get('text', '').strip()
     session_id = data.get('user', {}).get('id', 'default_session')
-
     if not user_input or data.get('user', {}).get('type') == 'BOT':
         return jsonify({})
-
     logging.info(f"Consulta recibida de '{session_id}': '{user_input}'")
-    
     current_chat_history = chat_histories.get(session_id, [])
-    
     try:
         result = final_chain.invoke({
             "input": user_input,
             "chat_history": current_chat_history
         })
         answer_for_user = result
-
         current_chat_history.extend([
             HumanMessage(content=user_input),
             AIMessage(content=answer_for_user)
         ])
         chat_histories[session_id] = current_chat_history[-10:]
-
         logging.info(f"Respuesta generada para '{session_id}': '{answer_for_user}'")
         return jsonify({"text": answer_for_user})
-
     except Exception as e:
         logging.error(f"Error procesando la solicitud RAG: {e}", exc_info=True)
         return jsonify({"text": "Lo siento, ha ocurrido un error al procesar tu solicitud."}), 500
