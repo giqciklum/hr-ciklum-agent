@@ -1,4 +1,4 @@
-# app.py (Versión 10 - Definitiva, Modular y Optimizada)
+# app.py (Versión 11 - Final Autocontenida y Robusta)
 import os
 import logging
 from flask import Flask, request, jsonify
@@ -28,7 +28,8 @@ BASE_URL = os.getenv("OPENAI_API_BASE", "https://genai-gateway.azure-api.net/")
 PERSIST_DIRECTORY = "chroma_db_v2"
 MODEL_NAME = "gpt-4o"
 EMBEDDING_MODEL_NAME = "text-embedding-3-large"
-GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "bustling-cosmos-462514-a4")
+# Para mayor portabilidad, es recomendable mover esto a una variable de entorno en tu cloudbuild.yaml
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "bustling-cosmos-462514-a4") 
 
 if not API_KEY or not GCP_PROJECT_ID:
     logging.critical("FATAL: Faltan variables de entorno esenciales (OPENAI_API_KEY o GCP_PROJECT_ID).")
@@ -37,8 +38,12 @@ if not API_KEY or not GCP_PROJECT_ID:
 # --- "Memoria" del Chatbot ---
 chat_histories: Dict[str, Any] = {}
 
-# --- Función para obtener la PERSONALIDAD del prompt desde Secret Manager ---
+# --- Función para obtener la PERSONALIDAD del prompt ---
 def get_hr_prompt_personality() -> str:
+    """
+    Obtiene la última versión de la personalidad del prompt desde Google Cloud Secret Manager.
+    Si falla, devuelve un prompt de emergencia completo para que la app no se caiga.
+    """
     try:
         secret_id = "hr-ciklum-prompt"
         version_id = "latest"
@@ -50,8 +55,28 @@ def get_hr_prompt_personality() -> str:
         return prompt_text
     except Exception as e:
         logging.error(f"❌ CRITICAL: No se pudo cargar la personalidad del prompt. Usando personalidad de emergencia. Error: {e}")
-        # El prompt de emergencia también es solo la personalidad, sin placeholders.
-        return """**TU ROL:** Eres HRCiklum... (etc.)"""
+        # --- PROMPT DE EMERGENCIA COMPLETO ---
+        # Este es el prompt V8 "limpio" que se usará si falla la conexión con Secret Manager.
+        return """**TU ROL:** Eres HRCiklum, tu Asistente de IA y compañero experto dentro de Ciklum. Tu misión es ser excepcionalmente servicial, proactivo y fiable. No eres un simple buscador de datos, eres un solucionador de problemas.
+
+**TUS PRINCIPIOS (INQUEBRANTABLES):**
+
+1.  **IDIOMA DE RESPUESTA (Regla Maestra):** Detecta el idioma principal de la **PREGUNTA DEL USUARIO** (español o inglés) y responde **siempre** en ese mismo idioma.
+
+2.  **BASE EN LA EVIDENCIA (Regla de Oro):** Basa tus respuestas **única y exclusivamente** en la información del CONTEXTO proporcionado. **NUNCA INVENTES NADA.**
+
+3.  **PENSAMIENTO PASO A PASO (Para Preguntas Complejas):** Ante una pregunta que requiera combinar información de varias fuentes, razona internamente paso a paso para sintetizar la información en una única respuesta coherente.
+
+4.  **RESPUESTAS PROACTIVAS COMO PLANES DE ACCIÓN:** No te limites a responder, ¡guía al usuario! Si la pregunta implica una acción, tu respuesta debe ser un plan de acción claro y numerado.
+
+5.  **DISCRIMINACIÓN PRECISA:** Si el usuario pregunta específicamente por un proceso, enfoca tu respuesta exclusivamente en ese proceso.
+
+6.  **GESTIÓN DE INCERTIDUMBRE Y RESILIENCIA (Protocolo Mejorado):**
+    * Si el contexto es pobre pero relevante, intenta dar una respuesta parcial y útil.
+    * Si el contexto está vacío o no es relevante, responde con amabilidad y sugiere cómo formular la pregunta a RRHH.
+    * Si la pregunta es sobre temas legales, explica que tu función se basa en las políticas internas y recomienda contactar con RRHH.
+
+7.  **TONO AMIGABLE Y COMPAÑERO:** Usa un tono cercano, positivo y empático. Termina siempre tus respuestas con una frase de ayuda."""
 
 # --- Arquitectura de la Cadena de IA ---
 final_chain = None
@@ -72,13 +97,7 @@ try:
     history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
 
     # --- ARQUITECTURA MODULAR Y SEGURA DEL PROMPT ---
-    
-    # 1. Obtenemos la "personalidad" (el texto limpio) desde Secret Manager UNA VEZ al inicio.
-    # Esto lo puede editar un equipo no técnico de forma segura.
     prompt_personality = get_hr_prompt_personality()
-
-    # 2. El código define la "estructura técnica" con los placeholders que LangChain necesita.
-    # Esta parte no debe ser tocada por personal no técnico.
     full_system_prompt_template = f"""{prompt_personality}
 
 CONTEXTO (Información interna y verificada de Ciklum):
@@ -88,7 +107,6 @@ PREGUNTA DEL USUARIO (previamente analizada y contextualizada):
 {{input}}
 """
     
-    # 3. Se crea la plantilla final combinando ambas partes.
     answer_generation_prompt = ChatPromptTemplate.from_messages([
         ("system", full_system_prompt_template),
         MessagesPlaceholder(variable_name="chat_history"),
@@ -105,7 +123,7 @@ PREGUNTA DEL USUARIO (previamente analizada y contextualizada):
     
     final_chain = rag_chain | (lambda x: x['answer'])
     
-    logging.info("✅ Arquitectura de IA Definitiva (v10 - Modular y Optimizada) inicializada.")
+    logging.info("✅ Arquitectura de IA Definitiva (v11 - Autocontenida) inicializada.")
 
 except Exception as e:
     logging.critical(f"❌ FATAL: La cadena RAG no pudo inicializarse: {e}", exc_info=True)
@@ -114,31 +132,37 @@ except Exception as e:
 # --- Aplicación Web Flask (Sin cambios) ---
 app = Flask(__name__)
 
-# ... (El resto del fichero Flask es idéntico y correcto) ...
 @app.route("/chat", methods=["POST"])
 def handle_chat_event():
     if not final_chain:
         return jsonify({"text": "Lo siento, el asistente no está disponible en este momento."}), 500
+    
     data = request.json
     user_input = data.get('message', {}).get('text', '').strip()
     session_id = data.get('user', {}).get('id', 'default_session')
+
     if not user_input or data.get('user', {}).get('type') == 'BOT':
         return jsonify({})
+
     logging.info(f"Consulta recibida de '{session_id}': '{user_input}'")
     current_chat_history = chat_histories.get(session_id, [])
+    
     try:
         result = final_chain.invoke({
             "input": user_input,
             "chat_history": current_chat_history
         })
         answer_for_user = result
+
         current_chat_history.extend([
             HumanMessage(content=user_input),
             AIMessage(content=answer_for_user)
         ])
         chat_histories[session_id] = current_chat_history[-10:]
+
         logging.info(f"Respuesta generada para '{session_id}': '{answer_for_user}'")
         return jsonify({"text": answer_for_user})
+        
     except Exception as e:
         logging.error(f"Error procesando la solicitud RAG: {e}", exc_info=True)
         return jsonify({"text": "Lo siento, ha ocurrido un error al procesar tu solicitud."}), 500
