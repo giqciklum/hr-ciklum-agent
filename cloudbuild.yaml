@@ -1,42 +1,34 @@
-# cloudbuild.yaml (Versión Definitiva v4 - Sintaxis Corregida)
+# cloudbuild.yaml (Versión Final y Automatizada)
 steps:
-# Paso 1: Descargar SOLO los documentos fuente.
+# Paso 1: Descargar los documentos fuente desde GCS.
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   id: pull-docs
   entrypoint: bash
   args:
     - '-c'
     - |
-      echo ">> Descargando documentos fuente desde gs://${_GCS_BUCKET_NAME}/ (excluyendo directorios de DB)..."
       mkdir -p docs
-      # --- LÍNEA CORREGIDA ---
-      # Cambiamos 'gs://${_GCS_BUCKET_NAME}/*' por 'gs://${_GCS_BUCKET_NAME}/'
-      # Esto hace que el comando sea más robusto y compatible con el flag de exclusión -x.
-      gsutil -m cp -r -x ".*chroma_db_v2/.*" gs://${_GCS_BUCKET_NAME}/ docs/
+      gsutil -m cp -r gs://hr-bot-docs/* docs/
 
-# Paso 2: Instalar las dependencias.
+# Paso 2: Instalar las dependencias de Python necesarias para el script de indexación.
 - name: 'python:3.11-slim'
   id: install-dependencies
   entrypoint: 'pip'
   args: ['install', '-r', 'requirements.txt', '--user']
   waitFor: ['pull-docs']
 
-# Paso 3: Ejecutar build_index.py para crear la nueva base de datos.
+# Paso 3: Ejecutar el script 'build_index.py' para crear la base de datos.
+# Este paso crea la carpeta 'chroma_db_v2' que se subirá a GCS.
 - name: 'python:3.11-slim'
   id: build-vector-index
   entrypoint: 'python'
   args: ['build_index.py']
   waitFor: ['install-dependencies']
 
-# Paso 4: Subir la nueva base de datos a GCS.
+# Paso 4: Subir la base de datos recién creada a Google Cloud Storage.
 - name: 'gcr.io/cloud-builders/gsutil'
   id: upload-db-to-gcs
-  entrypoint: 'bash'
-  args:
-    - '-c'
-    - |
-      echo ">> Subiendo nueva base de datos vectorial a gs://${_GCS_BUCKET_NAME}/chroma_db_v2/..."
-      gsutil -m cp -r chroma_db_v2 gs://${_GCS_BUCKET_NAME}/
+  args: ['-m', 'cp', '-r', 'chroma_db_v2', 'gs://${_GCS_BUCKET_NAME}/']
   waitFor: ['build-vector-index']
 
 # Paso 5: Construir la imagen de la aplicación Docker.
@@ -44,7 +36,7 @@ steps:
   id: docker-build
   args: ['build', '-t', 'gcr.io/$PROJECT_ID/hr-ciklum-agent', '.']
 
-# Paso 6: Subir la imagen construida.
+# Paso 6: Subir la imagen construida a Google Container Registry.
 - name: 'gcr.io/cloud-builders/docker'
   id: docker-push
   args: ['push', 'gcr.io/$PROJECT_ID/hr-ciklum-agent']
@@ -63,17 +55,14 @@ steps:
     - '--platform=managed'
     - '--memory=2Gi'
     - '--allow-unauthenticated'
-    - '--set-env-vars=OPENAI_API_BASE=${_OPENAI_API_BASE},GCS_BUCKET_NAME=${_GCS_BUCKET_NAME},PERSIST_DIRECTORY=chroma_db_v2,GCP_PROJECT_ID=$PROJECT_ID'
+    - '--set-env-vars=OPENAI_API_BASE=${_OPENAI_API_BASE},GCS_BUCKET_NAME=${_GCS_BUCKET_NAME},PERSIST_DIRECTORY=chroma_db_v2'
     - '--set-secrets=OPENAI_API_KEY=hr-bot-openai-key:latest'
-    - '--min-instances=1'
   waitFor: ['docker-push', 'upload-db-to-gcs']
 
-# --- Variables de Sustitución ---
 substitutions:
   _OPENAI_API_BASE: 'https://genai-gateway.azure-api.net/'
-  _GCS_BUCKET_NAME: 'hr-bot-docs'
+  _GCS_BUCKET_NAME: 'hr-bot-docs' # Usa tu bucket de GCS aquí
 
-# Timeout generoso para el proceso completo
 timeout: '1800s'
 options:
   logging: CLOUD_LOGGING_ONLY
