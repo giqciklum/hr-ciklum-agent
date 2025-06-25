@@ -1,16 +1,20 @@
-# app.py (Versión Final y Funcional)
+# app.py (Versión Mejorada - Experta y Fiable)
 import os
 import logging
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from typing import List, Dict, Any
+
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.documents import Document
-from langchain_core.runnables import RunnablePassthrough, RunnableLambda
+from langchain_core.runnables import RunnableParallel, RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.chains import create_history_aware_retriever
+from langchain.chains.combine_documents import create_stuff_documents_chain
+# ¡NUEVA IMPORTACIÓN!
+from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain_core.messages import HumanMessage, AIMessage
 
 # --- Configuración Inicial ---
@@ -20,7 +24,7 @@ load_dotenv()
 # --- Constantes y Variables de Entorno ---
 API_KEY = os.getenv("OPENAI_API_KEY")
 BASE_URL = os.getenv("OPENAI_API_BASE", "https://genai-gateway.azure-api.net/")
-PERSIST_DIRECTORY = "chroma_db_v2" # Asegúrate que build_index.py usa este mismo directorio
+PERSIST_DIRECTORY = "chroma_db_v2"
 MODEL_NAME = "gpt-4o"
 EMBEDDING_MODEL_NAME = "text-embedding-3-large"
 
@@ -31,23 +35,27 @@ if not API_KEY:
 # --- "Memoria" del Chatbot ---
 chat_histories: Dict[str, Any] = {}
 
-# --- Plantillas de Prompt ---
+# --- CAMBIO 1: RAG_PROMPT_V5 - EL PROMPT EVOLUCIONADO ---
 CONTEXTUALIZE_PROMPT_TEMPLATE = """Dada la siguiente conversación (chat_history) y la última pregunta del usuario (input), reformula la pregunta para que sea una pregunta independiente y clara que pueda entenderse sin el historial previo. No respondas a la pregunta, únicamente reformúlala."""
-RAG_PROMPT_V4 = """
-**TU ROL:** Eres HRCiklum, el asistente de RRHH de IA para empleados de Ciklum. Eres un compañero experto, fiable y práctico. Tu credibilidad es tu mayor valor.
+
+RAG_PROMPT_V5 = """
+**TU ROL:** Eres HRCiklum, el asistente de IA y compañero de confianza para los empleados de Ciklum. Tu objetivo es proporcionar respuestas claras, fiables y prácticas, actuando como un miembro experto y servicial del equipo de RRHH.
+
 **TUS PRINCIPIOS (INQUEBRANTABLES):**
-1.  **BASE EN LA EVIDENCIA:** Basa tus respuestas **única y exclusivamente** en la información del CONTEXTO proporcionado. **NUNCA INVENTES NADA.**
-2.  **INTERPRETA Y AYUDA:** Infiere la necesidad real del usuario. Si preguntan "¿quién me ayuda?", busca en el CONTEXTO el contacto o procedimiento específico para su problema implícito.
-3.  **RESPUESTAS PRÁCTICAS:** Comunícate de forma natural. Usa listas, puntos clave o pasos a seguir. El objetivo es que el empleado sepa exactamente qué hacer.
-4.  **GESTIÓN DE INCERTIDUMBRE:** Si el CONTEXTO está vacío o no es relevante, responde: "He revisado la documentación interna y no he encontrado información sobre este tema. Para una respuesta precisa, consulta directamente con RRHH."
-5.  **CLARIDAD Y CONCISIÓN:** Responde de forma directa y profesional.
+1.  **BASE EN LA EVIDENCIA (Regla de Oro):** Basa tus respuestas **única y exclusivamente** en la información del CONTEXTO proporcionado. **NUNCA INVENTES NADA.** Si un detalle no está en el contexto, no lo menciones.
+2.  **SÍNTESIS EXPERTA:** La pregunta del usuario puede ser compleja y la respuesta puede estar repartida en varios fragmentos del contexto. Tu tarea es **sintetizar toda la información relevante** en una única respuesta coherente y bien estructurada.
+3.  **RESPUESTAS PRÁCTICAS Y SERVICIALES:** Ve al grano. Usa listas, negritas y pasos a seguir para que el empleado sepa exactamente qué hacer. Anticipa la necesidad real: si preguntan por un "problema", responde con la "solución" que se encuentra en el contexto.
+4.  **GESTIÓN DE INCERTIDUMBRE (Protocolo Mejorado):**
+    * Si el CONTEXTO está vacío o claramente no es relevante para la pregunta, responde con amabilidad: "He revisado la documentación interna, pero no he encontrado información específica sobre este tema. Para asegurar que recibes una respuesta precisa, lo mejor es que consultes directamente con el equipo de RRHH. ¡Están para ayudarte!"
+    * Si el usuario pregunta sobre leyes externas (p.ej. "Estatuto de los Trabajadores") o pide comparaciones que no están en el contexto, explica tu función: "Mi conocimiento se basa en las políticas internas de Ciklum. Para interpretaciones de leyes externas o asuntos legales, el equipo de RRHH es el contacto adecuado para darte una orientación precisa."
+5.  **TONO AMIGABLE Y PROFESIONAL:** Sé cercano y servicial, pero siempre preciso y fiable. Termina tus respuestas con una nota positiva o una frase de ayuda como "Espero que esto te sea de ayuda" o "Si tienes otra duda, aquí estoy para ayudarte".
 
 **CONTEXTO (Información interna y verificada de Ciklum):**
 {context}
 ---
 **PREGUNTA DEL USUARIO (previamente analizada y contextualizada):**
 {input}
-**TU RESPUESTA (clara, práctica y basada 100% en el contexto):**
+**TU RESPUESTA (clara, práctica, servicial y basada 100% en el contexto):**
 """
 
 # --- Arquitectura de la Cadena de IA ---
@@ -58,17 +66,22 @@ try:
         temperature=0.0,
         openai_api_base=BASE_URL,
         openai_api_key=API_KEY,
-        max_tokens=400,
+        max_tokens=800, # Aumentamos ligeramente para respuestas más completas
         request_timeout=90
     )
     embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL_NAME, openai_api_base=BASE_URL, openai_api_key=API_KEY)
     vector_store = Chroma(persist_directory=PERSIST_DIRECTORY, embedding_function=embedder)
     logging.info(f"✅ Base de datos cargada con {vector_store._collection.count()} chunks.")
 
-    # === ARQUITECTURA DE RETRIEVER SIMPLIFICADA Y ROBUSTA ===
-    # Volvemos a un retriever simple que busca los 8 documentos más similares.
-    # Esto es mucho más robusto y es menos probable que devuelva una lista vacía.
-    base_retriever = vector_store.as_retriever(search_kwargs={"k": 8})
+    # === CAMBIO 2: REVOLUCIÓN DEL RETRIEVER -> MultiQueryRetriever ===
+    # En lugar de una búsqueda simple, usamos el LLM para generar varias preguntas
+    # y buscar documentos para todas ellas. Esto es clave para las preguntas complejas.
+    base_retriever = vector_store.as_retriever(search_kwargs={"k": 10}) # Aumentamos k para tener más documentos potenciales
+    
+    retriever = MultiQueryRetriever.from_llm(
+        retriever=base_retriever,
+        llm=llm
+    )
     
     def format_docs(docs: List[Document]) -> str:
         if not docs:
@@ -76,10 +89,6 @@ try:
             return ""
         
         logging.info(f"Retriever ha encontrado {len(docs)} documentos para el contexto.")
-        # Opcional: Loguear un trozo de cada documento para depurar
-        for i, doc in enumerate(docs):
-            logging.info(f"  - Doc {i+1} (Fuente: {doc.metadata.get('source', 'N/A')}): {doc.page_content[:100]}...")
-            
         return "\n\n".join(doc.page_content for doc in docs)
 
     # --- Creación de la cadena principal ---
@@ -90,31 +99,35 @@ try:
         ("human", "{input}"),
     ])
     
-    # Este retriever ahora es simple, sin compresores que puedan filtrar todos los resultados.
-    history_aware_retriever = create_history_aware_retriever(llm, base_retriever, contextualize_q_prompt)
+    history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
     
+    # --- CAMBIO 3: CADENA DE GENERACIÓN DE RESPUESTA MÁS CLARA ---
+    # Usamos `create_stuff_documents_chain` que está optimizado para esto.
     answer_generation_prompt = ChatPromptTemplate.from_messages([
-        ("system", RAG_PROMPT_V4),
+        ("system", RAG_PROMPT_V5),
+        MessagesPlaceholder(variable_name="chat_history"), # Incluimos el historial por si es útil
         ("human", "{input}"),
     ])
-    
-    rag_chain = (
-        {
-            "context": history_aware_retriever | format_docs,
-            "input": RunnablePassthrough()
-        }
-        | answer_generation_prompt
-        | llm
-        | StrOutputParser()
+
+    Youtube_chain = create_stuff_documents_chain(llm, answer_generation_prompt)
+
+    # La cadena final ahora combina la recuperación consciente del historial con la generación de respuestas.
+    rag_chain = RunnablePassthrough.assign(
+        context=history_aware_retriever,
+    ).assign(
+        answer=Youtube_chain,
     )
 
-    final_chain = rag_chain
-    logging.info("✅ Arquitectura de IA Experta (v17 - Robusta) inicializada correctamente.")
+    # Extraemos solo la respuesta final para el usuario.
+    final_chain = rag_chain | (lambda x: x['answer'])
+    
+    logging.info("✅ Arquitectura de IA Experta (v2 - MultiQuery) inicializada correctamente.")
 
 except Exception as e:
     logging.critical(f"❌ FATAL: La cadena RAG no pudo inicializarse: {e}", exc_info=True)
 
-# --- Aplicación Web Flask ---
+
+# --- Aplicación Web Flask (Sin cambios aquí) ---
 app = Flask(__name__)
 
 @app.route("/chat", methods=["POST"])
