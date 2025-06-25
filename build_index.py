@@ -1,8 +1,9 @@
-# build_index.py (Versión v26 - Corregida para Multiprocessing y Lambdas)
+# build_index.py (Versión v24 - Con Enriquecimiento Estructural Automático)
 from __future__ import annotations
 import os
 import re
 import glob
+import json
 import shutil
 import base64
 import signal
@@ -27,7 +28,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # --- Constantes y Modelos ---
 VISION_MODEL = "gpt-4o"
-EMBEDDING_MODEL_NAME = "text-embedding-3-small" # Mantenemos el modelo ligero para velocidad
+EMBEDDING_MODEL = "text-embedding-3-large"
 DOCS_FOLDER = "docs"
 PERSIST_DIR = "chroma_db_v2"
 VISION_TIMEOUT = 120
@@ -37,52 +38,92 @@ API_KEY = os.getenv("OPENAI_API_KEY")
 
 # --- Modelos y Splitter ---
 vision_llm = ChatOpenAI(model=VISION_MODEL, openai_api_base=API_BASE, openai_api_key=API_KEY, max_tokens=4096, request_timeout=VISION_TIMEOUT)
-embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL_NAME, openai_api_base=API_BASE, openai_api_key=API_KEY, chunk_size=1000)
+embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL, openai_api_base=API_BASE, openai_api_key=API_KEY, chunk_size=500)
 text_splitter = SemanticChunker(embedder, breakpoint_threshold_type="percentile")
 
-# ... (La lógica de Enriquecimiento Estructural TOPIC_RULES y enrich_text... no cambia y está correcta) ...
+
+# ==============================================================================
+# === LÓGICA DE ENRIQUECIMIENTO ESTRUCTURAL (¡LA NUEVA INTELIGENCIA!) ===
+# ==============================================================================
+
+# Este diccionario define los "temas clave" que queremos que el bot distinga.
+# Es fácilmente ampliable con nuevos temas en el futuro.
 TOPIC_RULES = {
-    "EXAMEN_DE_SALUD": { "title": "\n\n### PROCESO ESPECÍFICO: EXAMEN DE SALUD (VOLUNTARIO)\n\n", "keywords": ["examen médico", "examen de salud", "revisión médica", "aceptar o rechazar el examen", "reconocimiento médico"]},
-    "PRL_FORMACION": { "title": "\n\n### PROCESO ESPECÍFICO: FORMACIÓN EN PREVENCIÓN DE RIESGOS LABORALES (PRL)\n\n", "keywords": ["prevención de riesgos laborales", "preventiam", "accesoaula.com", "formación de 120 minutos"]},
-    "SEGURO_MEDICO": { "title": "\n\n### BENEFICIO CLAVE: ALTA EN SEGURO MÉDICO PRIVADO (MAPFRE)\n\n", "keywords": ["seguro médico", "mapfre", "alta en el seguro", "formulario de google para el seguro"]},
-    "RETRIBUCION_FLEXIBLE": { "title": "\n\n### BENEFICIO CLAVE: PLAN DE RETRIBUCIÓN FLEXIBLE (EDENRED)\n\n", "keywords": ["retribución flexible", "edenred", "tarjeta restaurante", "tarjeta transporte", "ticket restaurant", "guardería"]},
-    "VACACIONES_Y_PERMISOS": { "title": "\n\n### POLÍTICA CLAVE: VACACIONES Y PERMISOS\n\n", "keywords": ["vacaciones", "días de vacaciones", "extra agreement days", "solicitar vacaciones", "sesame planner"]},
-    "BAJA_LABORAL": { "title": "\n\n### POLÍTICA CLAVE: BAJA LABORAL (INCAPACIDAD TEMPORAL)\n\n", "keywords": ["baja laboral", "baja médica", "incapacidad temporal", "documented sick leave", "undocumented sick leave", "parte de baja"]},
+    "EXAMEN_DE_SALUD": {
+        "title": "\n\n### PROCESO ESPECÍFICO: EXAMEN DE SALUD (VOLUNTARIO)\n\n",
+        "keywords": ["examen médico", "examen de salud", "revisión médica", "aceptar o rechazar el examen", "reconocimiento médico"],
+    },
+    "PRL_FORMACION": {
+        "title": "\n\n### PROCESO ESPECÍFICO: FORMACIÓN EN PREVENCIÓN DE RIESGOS LABORALES (PRL)\n\n",
+        "keywords": ["prevención de riesgos laborales", "preventiam", "accesoaula.com", "formación de 120 minutos"],
+    },
+    "SEGURO_MEDICO": {
+        "title": "\n\n### BENEFICIO CLAVE: ALTA EN SEGURO MÉDICO PRIVADO (MAPFRE)\n\n",
+        "keywords": ["seguro médico", "mapfre", "alta en el seguro", "formulario de google para el seguro"],
+    },
+    "RETRIBUCION_FLEXIBLE": {
+        "title": "\n\n### BENEFICIO CLAVE: PLAN DE RETRIBUCIÓN FLEXIBLE (EDENRED)\n\n",
+        "keywords": ["retribución flexible", "edenred", "tarjeta restaurante", "tarjeta transporte", "ticket restaurant", "guardería"],
+    },
+    "VACACIONES_Y_PERMISOS": {
+        "title": "\n\n### POLÍTICA CLAVE: VACACIONES Y PERMISOS\n\n",
+        "keywords": ["vacaciones", "días de vacaciones", "extra agreement days", "solicitar vacaciones", "sesame planner"],
+    },
+    "BAJA_LABORAL": {
+        "title": "\n\n### POLÍTICA CLAVE: BAJA LABORAL (INCAPACIDAD TEMPORAL)\n\n",
+        "keywords": ["baja laboral", "baja médica", "incapacidad temporal", "documented sick leave", "undocumented sick leave", "parte de baja"],
+    }
 }
 
 def enrich_text_with_structural_headings(text: str) -> str:
+    """
+    Analiza el texto y le inserta títulos descriptivos antes de párrafos clave
+    para mejorar la precisión del chunking y del retrieval.
+    """
     enriched_paragraphs = []
+    # Usamos un separador más robusto que pueda manejar saltos de línea variados
     paragraphs = re.split(r'\n\s*\n', text)
+    
     last_inserted_topic = None
+
     for p in paragraphs:
-        if not p.strip(): continue
+        if not p.strip():
+            continue
+
         p_lower = p.lower()
         matched_topic = None
+
+        # Determinar si el párrafo actual pertenece a un tema clave
         for topic, rules in TOPIC_RULES.items():
             if any(kw in p_lower for kw in rules["keywords"]):
                 matched_topic = topic
                 break
+        
+        # Si encontramos un tema y es diferente al último que insertamos, añadimos el título
         if matched_topic and matched_topic != last_inserted_topic:
             enriched_paragraphs.append(rules["title"].strip())
             last_inserted_topic = matched_topic
+        
         enriched_paragraphs.append(p)
+
     return "\n\n".join(enriched_paragraphs)
 
-# --- Utilidades ---
+
+# --- Utilidades (Sin cambios aquí, excepto la llamada a la nueva función) ---
 def vision_extract(img_bytes: bytes) -> str:
-    # ... (Sin cambios aquí, esta función es correcta) ...
     def handler(signum, frame): raise TimeoutError("La extracción de visión superó el tiempo límite.")
     signal.signal(signal.SIGALRM, handler)
     signal.alarm(VISION_TIMEOUT)
     try:
         b64_image = base64.b64encode(img_bytes).decode('utf-8')
         resp = vision_llm.invoke([
-            SystemMessage(content="Eres un experto en OCR..."),
+            SystemMessage(content="Eres un experto en OCR. Extrae todo el texto y la estructura de tablas de la imagen, formateando las tablas en Markdown limpio. Mantén la estructura original lo mejor posible."),
             HumanMessage(content=[
-                {"type": "text", "text": "Extrae el texto..."},
+                {"type": "text", "text": "Extrae el texto y las tablas de esta imagen como Markdown."},
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_image}"}}
             ])
         ])
+        # Aplicamos el enriquecimiento también al texto extraído por OCR
         return enrich_text_with_structural_headings(resp.content.strip())
     except Exception as e:
         logging.error(f"Error en la API de Visión: {e}")
@@ -107,22 +148,25 @@ def has_complex_layout(text: str, line_threshold: int = 15, short_line_chars: in
     avg_line_len = sum(len(line) for line in lines) / len(lines) if len(lines) > 0 else 0
     return len(lines) > line_threshold and avg_line_len < short_line_chars
 
-# --- Procesadores de Ficheros ---
+# --- Procesadores de Ficheros (Modificados para usar el enriquecimiento) ---
+
 def process_pdf(path: str) -> List[Document]:
-    # ... (Sin cambios aquí, esta función es correcta) ...
     basename = os.path.basename(path)
     doc_title = extract_document_title(basename)
     documents = []
+    
     try:
         doc = fitz.open(path)
         for i, page in enumerate(tqdm(doc, desc=f"PDF: {basename}", leave=False), 1):
             meta = {"source": basename, "page": i, "title": doc_title}
             page_text = page.get_text("text").strip()
+
             if not page_text or has_complex_layout(page_text):
                 logging.info(f"Página {i} de '{basename}' es compleja/imagen. Usando OCR de visión.")
                 try:
                     pix = page.get_pixmap(dpi=200)
                     img_bytes = pix.tobytes("png")
+                    # La función vision_extract ya enriquece el texto internamente
                     vision_text = vision_extract(img_bytes)
                     if vision_text:
                         content = f"# Documento: {doc_title}\n## Página: {i}\n\n{vision_text}"
@@ -130,6 +174,7 @@ def process_pdf(path: str) -> List[Document]:
                 except Exception as e:
                     logging.warning(f"Error procesando página {i} con OCR: {e}")
             else:
+                # ¡AQUÍ APLICAMOS EL ENRIQUECIMIENTO!
                 enriched_text = enrich_text_with_structural_headings(page_text)
                 content = f"# Documento: {doc_title}\n## Página: {i}\n\n{enriched_text}"
                 documents.append(Document(page_content=content, metadata=meta))
@@ -138,17 +183,16 @@ def process_pdf(path: str) -> List[Document]:
     return documents
 
 def docx_extractor(path: str) -> str:
-    # ... (Sin cambios aquí, esta función es correcta) ...
     doc = docx.Document(path)
     parts = [p.text for p in doc.paragraphs if p.text.strip()]
     for table in doc.tables:
         table_md = "\n".join([f"| {' | '.join(cell.text.strip() for cell in row.cells)} |" for row in table.rows])
         parts.append(f"\n--- TABLA ---\n{table_md}\n--- FIN TABLA ---\n")
     raw_text = "\n\n".join(parts)
+    # ¡AQUÍ APLICAMOS EL ENRIQUECIMIENTO!
     return enrich_text_with_structural_headings(raw_text)
 
 def pptx_extractor(path: str) -> str:
-    # ... (Sin cambios aquí, esta función es correcta) ...
     prs = pptx.Presentation(path)
     parts = []
     for i, slide in enumerate(prs.slides, 1):
@@ -156,16 +200,17 @@ def pptx_extractor(path: str) -> str:
         for shape in slide.shapes:
             if hasattr(shape, "text") and shape.text.strip():
                 slide_texts.append(shape.text)
+        # Enriquecemos el texto de cada diapositiva
         enriched_slide_text = enrich_text_with_structural_headings("\n".join(slide_texts))
         parts.append(f"\n## Diapositiva {i}\n{enriched_slide_text}")
     return "\n".join(parts)
 
 def process_generic(path: str, extractor: callable) -> List[Document]:
-    # ... (Sin cambios aquí, esta función es correcta) ...
     basename = os.path.basename(path)
     doc_title = extract_document_title(basename)
     documents = []
     try:
+        # El enriquecimiento ahora está dentro de las funciones `_extractor`
         full_text = extractor(path)
         if full_text:
             meta = {"source": basename, "title": doc_title}
@@ -175,39 +220,21 @@ def process_generic(path: str, extractor: callable) -> List[Document]:
         logging.error(f"Error procesando '{basename}': {e}")
     return documents
 
-# --- NUEVAS FUNCIONES PARA REEMPLAZAR LAMBDAS ---
-# Estas funciones son "de primer nivel", lo que significa que Python puede "empaquetarlas"
-# (pickle) para enviarlas a otros procesos sin problemas.
-def process_docx(path: str) -> List[Document]:
-    return process_generic(path, docx_extractor)
-
-def process_pptx(path: str) -> List[Document]:
-    return process_generic(path, pptx_extractor)
-
-
 def process_file(path: str) -> List[Document]:
     ext = path.lower().split('.')[-1]
-    
-    # --- DICCIONARIO DE PROCESADORES CORREGIDO ---
-    # Ahora usa las nuevas funciones con nombre en lugar de lambdas.
     processor_map = {
         "pdf": process_pdf,
-        "docx": process_docx,
-        "pptx": process_pptx,
+        "docx": lambda p: process_generic(p, docx_extractor),
+        "pptx": lambda p: process_generic(p, pptx_extractor),
     }
-    
     if ext in processor_map:
-        # --- LLAMADA CORREGIDA ---
-        # Ahora ejecutamos la función (`processor_map[ext](path)`) y devolvemos su resultado.
         return processor_map[ext](path)
-        
     logging.warning(f"Extensión '{ext}' no soportada para el fichero {os.path.basename(path)}")
     return []
 
-
 # --- Main Execution (sin cambios) ---
 if __name__ == "__main__":
-    print(f"── Construyendo índice vectorial (Optimizado para Velocidad) en '{PERSIST_DIR}' ──")
+    print(f"── Construyendo índice vectorial v24 (Enriquecido Automáticamente) en '{PERSIST_DIR}' ──")
     if os.path.exists(PERSIST_DIR):
         print(f"Borrando el directorio de índice antiguo: {PERSIST_DIR}")
         shutil.rmtree(PERSIST_DIR)
