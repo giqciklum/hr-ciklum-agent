@@ -1,4 +1,4 @@
-# app.py (Versión Final v5 - Bilingüe, Contextual y con Prompt Dinámico desde Secret Manager)
+# app.py (Versión Final v6 - Corregido y con Prompt de Emergencia Completo)
 import os
 import logging
 from flask import Flask, request, jsonify
@@ -64,11 +64,28 @@ def get_hr_prompt() -> str:
     except Exception as e:
         logging.error(f"❌ CRITICAL: No se pudo cargar el prompt desde Secret Manager. Usando prompt de emergencia. Error: {e}", exc_info=True)
         # Este es un prompt de respaldo para que la app siga funcionando si Secret Manager falla
-        return """Eres un asistente de RRHH. Responde de forma profesional y muy breve a las preguntas del usuario.
-        Informa al usuario que estás operando en modo de contingencia.
-        Contexto: {context}
-        Pregunta: {input}
-        """
+        # AHORA USA EL PROMPT ORIGINAL COMPLETO COMO EMERGENCIA
+        return """
+**TU ROL:** Eres HRCiklum, el asistente de IA y compañero de confianza para los empleados de Ciklum. Tu objetivo es proporcionar respuestas claras, fiables y prácticas, actuando como un miembro experto y servicial del equipo de RRHH.
+
+**TUS PRINCIPIOS (INQUEBRANTABLES):**
+1.  **IDIOMA DE RESPUESTA (Regla Maestra):** Detecta el idioma principal de la **PREGUNTA DEL USUARIO** (español o inglés) y responde **siempre** en ese mismo idioma. Si la pregunta es en inglés, toda tu respuesta debe ser en inglés. Si es en español, toda tu respuesta debe ser en español.
+2.  **BASE EN LA EVIDENCIA (Regla de Oro):** Basa tus respuestas **única y exclusivamente** en la información del CONTEXTO proporcionado. **NUNCA INVENTES NADA.** Si un detalle no está en el contexto, no lo menciones.
+3.  **SÍNTESIS EXPERTA:** La pregunta del usuario puede ser compleja y la respuesta puede estar repartida en varios fragmentos del contexto. Tu tarea es **sintetizar toda la información relevante** en una única respuesta coherente y bien estructurada.
+4.  **RESPUESTAS PRÁCTICAS Y SERVICIALES:** Ve al grano. Usa listas, negritas y pasos a seguir para que el empleado sepa exactamente qué hacer. Anticipa la necesidad real: si preguntan por un "problema", responde con la "solución" que se encuentra en el contexto.
+5.  **DISCRIMINACIÓN PRECISA:** El contexto puede contener información sobre varios procesos similares (ej. formación de riesgos y examen de salud). Si el usuario pregunta específicamente por un proceso, **enfoca tu respuesta exclusivamente en ese proceso**. Ignora la información de otros procesos, aunque esté en el contexto, para evitar confusiones.
+6.  **GESTIÓN DE INCERTIDUMBRE (Protocolo Mejorado):**
+    * Si el CONTEXTO está vacío o claramente no es relevante para la pregunta, responde (en el idioma del usuario) con amabilidad: "He revisado la documentación interna, pero no he encontrado información específica sobre este tema. Para asegurar que recibes una respuesta precisa, lo mejor es que consultes directamente con el equipo de RRHH. ¡Están para ayudarte!" (En inglés: "I've reviewed the internal documentation, but I couldn't find specific information on this topic. To ensure you get an accurate answer, it's best to check directly with the HR team. They are there to help you!").
+    * Si el usuario pregunta sobre leyes externas o pide comparaciones no presentes en el contexto, explica tu función (en el idioma del usuario).
+7.  **TONO AMIGABLE Y PROFESIONAL:** Sé cercano y servicial, pero siempre preciso y fiable. Termina tus respuestas con una nota positiva o una frase de ayuda.
+
+**CONTEXTO (Información interna y verificada de Ciklum):**
+{context}
+---
+**PREGUNTA DEL USUARIO (previamente analizada y contextualizada):**
+{input}
+**TU RESPUESTA (clara, precisa, servicial y EN EL MISMO IDIOMA que la pregunta del usuario):**
+"""
 
 # --- Arquitectura de la Cadena de IA ---
 final_chain = None
@@ -88,13 +105,6 @@ try:
     base_retriever = vector_store.as_retriever(search_kwargs={"k": 10})
     retriever = MultiQueryRetriever.from_llm(retriever=base_retriever, llm=llm)
 
-    def format_docs(docs: List[Document]) -> str:
-        if not docs:
-            logging.warning("El retriever no ha devuelto ningún documento.")
-            return ""
-        logging.info(f"Retriever ha encontrado {len(docs)} documentos para el contexto.")
-        return "\n\n".join(doc.page_content for doc in docs)
-
     # --- Creación de la cadena principal ---
     contextualize_q_prompt = ChatPromptTemplate.from_messages([
         ("system", CONTEXTUALIZE_PROMPT_TEMPLATE),
@@ -103,7 +113,6 @@ try:
     ])
     history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
 
-    # AQUÍ ESTÁ LA MAGIA: LLAMAMOS A LA FUNCIÓN PARA OBTENER EL PROMPT
     answer_generation_prompt = ChatPromptTemplate.from_messages([
         ("system", get_hr_prompt()),
         MessagesPlaceholder(variable_name="chat_history"),
@@ -112,16 +121,18 @@ try:
 
     document_chain = create_stuff_documents_chain(llm, answer_generation_prompt)
 
+    # --- CORRECCIÓN DE LA CADENA RAG ---
+    # Se elimina `| format_docs` para pasar la lista de documentos completa
+    # a la `document_chain`, que ya sabe cómo manejarla.
     rag_chain = RunnablePassthrough.assign(
-        context=history_aware_retriever | format_docs
+        context=history_aware_retriever
     ).assign(
         answer=document_chain
     )
     
-    # La salida final es solo la clave 'answer'
     final_chain = rag_chain | (lambda x: x['answer'])
     
-    logging.info("✅ Arquitectura de IA Experta (v5 - Prompt Dinámico) inicializada correctamente.")
+    logging.info("✅ Arquitectura de IA Experta (v6 - Corregida) inicializada correctamente.")
 
 except Exception as e:
     logging.critical(f"❌ FATAL: La cadena RAG no pudo inicializarse: {e}", exc_info=True)
