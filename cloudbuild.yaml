@@ -1,37 +1,33 @@
-# cloudbuild.yaml (Versión Definitiva - CI/CD Completa para App y Conocimiento)
+# cloudbuild.yaml (Versión Definitiva y Corregida - v3)
 steps:
-# ==============================================================================
-# === FASE 1: GESTIÓN DEL CONOCIMIENTO (Actualiza la Base de Datos Vectorial) ===
-# ==============================================================================
-
-# Paso 1: Descargar los documentos fuente desde Google Cloud Storage (GCS).
+# Paso 1: Descargar SOLO los documentos fuente, excluyendo la base de datos antigua.
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   id: pull-docs
   entrypoint: bash
   args:
     - '-c'
     - |
-      echo ">> Descargando documentos fuente desde gs://${_GCS_BUCKET_NAME}/..."
+      echo ">> Descargando documentos fuente desde gs://${_GCS_BUCKET_NAME}/ (excluyendo directorios de DB)..."
       mkdir -p docs
-      gsutil -m cp -r gs://${_GCS_BUCKET_NAME}/* docs/
+      # --- LÍNEA CORREGIDA ---
+      # El flag -x excluye cualquier ruta que contenga 'chroma_db_v2/'
+      gsutil -m cp -r -x ".*chroma_db_v2/.*" gs://${_GCS_BUCKET_NAME}/* docs/
 
-# Paso 2: Instalar las dependencias de Python para la indexación.
+# Paso 2: Instalar las dependencias.
 - name: 'python:3.11-slim'
   id: install-dependencies
   entrypoint: 'pip'
   args: ['install', '-r', 'requirements.txt', '--user']
   waitFor: ['pull-docs']
 
-# Paso 3: Ejecutar el script para crear una nueva base de datos vectorial.
-# Usará el modelo 'text-embedding-3-small' para ser rápida y ligera.
+# Paso 3: Ejecutar build_index.py para crear una nueva base de datos ligera.
 - name: 'python:3.11-slim'
   id: build-vector-index
   entrypoint: 'python'
   args: ['build_index.py']
   waitFor: ['install-dependencies']
 
-# Paso 4: Subir la base de datos vectorial recién creada a GCS.
-# Esta será la base de datos que la aplicación descargará al arrancar.
+# Paso 4: Subir la nueva base de datos a GCS.
 - name: 'gcr.io/cloud-builders/gsutil'
   id: upload-db-to-gcs
   entrypoint: 'bash'
@@ -40,26 +36,20 @@ steps:
     - |
       echo ">> Subiendo nueva base de datos vectorial a gs://${_GCS_BUCKET_NAME}/chroma_db_v2/..."
       gsutil -m cp -r chroma_db_v2 gs://${_GCS_BUCKET_NAME}/
-
   waitFor: ['build-vector-index']
 
-
-# ==============================================================================
-# === FASE 2: GESTIÓN DE LA APLICACIÓN (Construye y Despliega el Chatbot)   ===
-# ==============================================================================
-
-# Paso 5: Construir la imagen de la aplicación con Docker.
+# Paso 5: Construir la imagen de la aplicación Docker.
 - name: 'gcr.io/cloud-builders/docker'
   id: docker-build
   args: ['build', '-t', 'gcr.io/$PROJECT_ID/hr-ciklum-agent', '.']
 
-# Paso 6: Subir la imagen construida a Google Container Registry (GCR).
+# Paso 6: Subir la imagen construida.
 - name: 'gcr.io/cloud-builders/docker'
   id: docker-push
   args: ['push', 'gcr.io/$PROJECT_ID/hr-ciklum-agent']
   waitFor: ['docker-build']
 
-# Paso 7: Desplegar la nueva versión en Cloud Run con la configuración óptima.
+# Paso 7: Desplegar la nueva revisión en Cloud Run.
 - name: 'gcr.io/cloud-builders/gcloud'
   id: run-deploy
   entrypoint: 'gcloud'
@@ -72,18 +62,15 @@ steps:
     - '--platform=managed'
     - '--memory=2Gi'
     - '--allow-unauthenticated'
-    # --- Variables de Entorno Clave para la Aplicación ---
     - '--set-env-vars=OPENAI_API_BASE=${_OPENAI_API_BASE},GCS_BUCKET_NAME=${_GCS_BUCKET_NAME},PERSIST_DIRECTORY=chroma_db_v2,GCP_PROJECT_ID=$PROJECT_ID'
-    # --- Montaje de Secretos ---
     - '--set-secrets=OPENAI_API_KEY=hr-bot-openai-key:latest'
-    # --- Configuración de Rendimiento para Eliminar "Cold Start" ---
     - '--min-instances=1'
   waitFor: ['docker-push', 'upload-db-to-gcs']
 
-# --- Variables de Sustitución para la Pipeline ---
+# --- Variables de Sustitución ---
 substitutions:
   _OPENAI_API_BASE: 'https://genai-gateway.azure-api.net/'
-  _GCS_BUCKET_NAME: 'hr-bot-docs' # Tu bucket que contiene los documentos y la DB vectorial
+  _GCS_BUCKET_NAME: 'hr-bot-docs'
 
 # Timeout generoso para el proceso completo
 timeout: '1800s'
