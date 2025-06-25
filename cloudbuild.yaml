@@ -1,4 +1,4 @@
-# cloudbuild.yaml (Versión Final y Automatizada)
+# cloudbuild.yaml (Versión Final y Optimizada para Rendimiento)
 steps:
 # Paso 1: Descargar los documentos fuente desde GCS.
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -57,6 +57,8 @@ steps:
     - '--allow-unauthenticated'
     - '--set-env-vars=OPENAI_API_BASE=${_OPENAI_API_BASE},GCS_BUCKET_NAME=${_GCS_BUCKET_NAME},PERSIST_DIRECTORY=chroma_db_v2'
     - '--set-secrets=OPENAI_API_KEY=hr-bot-openai-key:latest'
+    # --- LÍNEA CLAVE AÑADIDA PARA ELIMINAR EL "COLD START" ---
+    - '--min-instances=1'
   waitFor: ['docker-push', 'upload-db-to-gcs']
 
 substitutions:
