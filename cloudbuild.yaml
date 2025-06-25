@@ -1,6 +1,6 @@
-# cloudbuild.yaml (Versión Definitiva y Corregida - v3)
+# cloudbuild.yaml (Versión Definitiva v4 - Sintaxis Corregida)
 steps:
-# Paso 1: Descargar SOLO los documentos fuente, excluyendo la base de datos antigua.
+# Paso 1: Descargar SOLO los documentos fuente.
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   id: pull-docs
   entrypoint: bash
@@ -10,8 +10,9 @@ steps:
       echo ">> Descargando documentos fuente desde gs://${_GCS_BUCKET_NAME}/ (excluyendo directorios de DB)..."
       mkdir -p docs
       # --- LÍNEA CORREGIDA ---
-      # El flag -x excluye cualquier ruta que contenga 'chroma_db_v2/'
-      gsutil -m cp -r -x ".*chroma_db_v2/.*" gs://${_GCS_BUCKET_NAME}/* docs/
+      # Cambiamos 'gs://${_GCS_BUCKET_NAME}/*' por 'gs://${_GCS_BUCKET_NAME}/'
+      # Esto hace que el comando sea más robusto y compatible con el flag de exclusión -x.
+      gsutil -m cp -r -x ".*chroma_db_v2/.*" gs://${_GCS_BUCKET_NAME}/ docs/
 
 # Paso 2: Instalar las dependencias.
 - name: 'python:3.11-slim'
@@ -20,7 +21,7 @@ steps:
   args: ['install', '-r', 'requirements.txt', '--user']
   waitFor: ['pull-docs']
 
-# Paso 3: Ejecutar build_index.py para crear una nueva base de datos ligera.
+# Paso 3: Ejecutar build_index.py para crear la nueva base de datos.
 - name: 'python:3.11-slim'
   id: build-vector-index
   entrypoint: 'python'
