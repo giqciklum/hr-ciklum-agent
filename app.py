@@ -20,7 +20,9 @@ load_dotenv()
 # --- Constantes y Variables de Entorno ---
 API_KEY = os.getenv("OPENAI_API_KEY")
 BASE_URL = os.getenv("OPENAI_API_BASE", "https://genai-gateway.azure-api.net/")
-PERSIST_DIRECTORY = "chroma_db_v2" # Asegúrate que build_index.py usa este mismo directorio
+# --- ¡¡¡IMPORTANTE!!! ---
+# Esta variable DEBE coincidir con la de 'build_index.py' para cargar la base de datos correcta.
+PERSIST_DIRECTORY = "chroma_db_final" 
 MODEL_NAME = "gpt-4o"
 EMBEDDING_MODEL_NAME = "text-embedding-3-large"
 
@@ -63,11 +65,9 @@ try:
     )
     embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL_NAME, openai_api_base=BASE_URL, openai_api_key=API_KEY)
     vector_store = Chroma(persist_directory=PERSIST_DIRECTORY, embedding_function=embedder)
-    logging.info(f"✅ Base de datos cargada con {vector_store._collection.count()} chunks.")
+    logging.info(f"✅ Base de datos cargada desde '{PERSIST_DIRECTORY}' con {vector_store._collection.count()} chunks.")
 
-    # === ARQUITECTURA DE RETRIEVER SIMPLIFICADA Y ROBUSTA ===
-    # Volvemos a un retriever simple que busca los 8 documentos más similares.
-    # Esto es mucho más robusto y es menos probable que devuelva una lista vacía.
+    # Arquitectura de Retriever
     base_retriever = vector_store.as_retriever(search_kwargs={"k": 8})
     
     def format_docs(docs: List[Document]) -> str:
@@ -76,40 +76,37 @@ try:
             return ""
         
         logging.info(f"Retriever ha encontrado {len(docs)} documentos para el contexto.")
-        # Opcional: Loguear un trozo de cada documento para depurar
         for i, doc in enumerate(docs):
-            logging.info(f"  - Doc {i+1} (Fuente: {doc.metadata.get('source', 'N/A')}): {doc.page_content[:100]}...")
+            logging.info(f"  - Doc {i+1} (Fuente: {doc.metadata.get('source', 'N/A')}, Página: {doc.metadata.get('page', 'N/A')}): {doc.page_content[:120]}...")
             
-        return "\n\n".join(doc.page_content for doc in docs)
+        return "\n\n---\n\n".join(doc.page_content for doc in docs)
 
-    # --- Creación de la cadena principal ---
-    
+    # Creación de la cadena principal
     contextualize_q_prompt = ChatPromptTemplate.from_messages([
         ("system", CONTEXTUALIZE_PROMPT_TEMPLATE),
         MessagesPlaceholder(variable_name="chat_history"),
         ("human", "{input}"),
     ])
     
-    # Este retriever ahora es simple, sin compresores que puedan filtrar todos los resultados.
     history_aware_retriever = create_history_aware_retriever(llm, base_retriever, contextualize_q_prompt)
     
     answer_generation_prompt = ChatPromptTemplate.from_messages([
         ("system", RAG_PROMPT_V4),
+        MessagesPlaceholder(variable_name="chat_history"), # Incluir historial también aquí puede ayudar
         ("human", "{input}"),
     ])
     
     rag_chain = (
-        {
-            "context": history_aware_retriever | format_docs,
-            "input": RunnablePassthrough()
-        }
+        RunnablePassthrough.assign(
+            context=history_aware_retriever | format_docs
+        )
         | answer_generation_prompt
         | llm
         | StrOutputParser()
     )
 
     final_chain = rag_chain
-    logging.info("✅ Arquitectura de IA Experta (v17 - Robusta) inicializada correctamente.")
+    logging.info("✅ Arquitectura de IA (v21 - Balanceada) inicializada correctamente.")
 
 except Exception as e:
     logging.critical(f"❌ FATAL: La cadena RAG no pudo inicializarse: {e}", exc_info=True)
@@ -155,4 +152,4 @@ def handle_chat_event():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
-    app.run(port=port, host='0.0.0.0', debug=True)
+    app.run(port=port, host='0.0.0.0', debug=False)
