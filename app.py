@@ -31,7 +31,7 @@ MODEL_NAME = "gpt-4o"
 EMBEDDING_MODEL_NAME = "text-embedding-3-large"
 
 # ID de tu proyecto de Google Cloud
-GCP_PROJECT_ID = "justifying-camera-44231-g4"
+GCP_PROJECT_ID = "bustling-cosmos-462514-a4"
 
 if not API_KEY:
     logging.critical("FATAL: No se ha encontrado la 'OPENAI_API_KEY'.")
