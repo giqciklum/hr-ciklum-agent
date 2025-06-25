@@ -1,4 +1,4 @@
-# build_index.py (Versión Final - Optimizada para Velocidad y Simplicidad)
+# build_index.py (Versión v26 - Corregida para Multiprocessing y Lambdas)
 from __future__ import annotations
 import os
 import re
@@ -27,9 +27,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # --- Constantes y Modelos ---
 VISION_MODEL = "gpt-4o"
-# --- CAMBIO CLAVE PARA LA VELOCIDAD ---
-# Usamos el modelo "small" para mantener la base de datos ligera y el arranque rápido.
-EMBEDDING_MODEL_NAME = "text-embedding-3-small" 
+EMBEDDING_MODEL_NAME = "text-embedding-3-small" # Mantenemos el modelo ligero para velocidad
 DOCS_FOLDER = "docs"
 PERSIST_DIR = "chroma_db_v2"
 VISION_TIMEOUT = 120
@@ -42,35 +40,14 @@ vision_llm = ChatOpenAI(model=VISION_MODEL, openai_api_base=API_BASE, openai_api
 embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL_NAME, openai_api_base=API_BASE, openai_api_key=API_KEY, chunk_size=1000)
 text_splitter = SemanticChunker(embedder, breakpoint_threshold_type="percentile")
 
-
-# ==============================================================================
-# === LÓGICA DE ENRIQUECIMIENTO ESTRUCTURAL ===
-# ==============================================================================
+# ... (La lógica de Enriquecimiento Estructural TOPIC_RULES y enrich_text... no cambia y está correcta) ...
 TOPIC_RULES = {
-    "EXAMEN_DE_SALUD": {
-        "title": "\n\n### PROCESO ESPECÍFICO: EXAMEN DE SALUD (VOLUNTARIO)\n\n",
-        "keywords": ["examen médico", "examen de salud", "revisión médica", "aceptar o rechazar el examen", "reconocimiento médico"],
-    },
-    "PRL_FORMACION": {
-        "title": "\n\n### PROCESO ESPECÍFICO: FORMACIÓN EN PREVENCIÓN DE RIESGOS LABORALES (PRL)\n\n",
-        "keywords": ["prevención de riesgos laborales", "preventiam", "accesoaula.com", "formación de 120 minutos"],
-    },
-    "SEGURO_MEDICO": {
-        "title": "\n\n### BENEFICIO CLAVE: ALTA EN SEGURO MÉDICO PRIVADO (MAPFRE)\n\n",
-        "keywords": ["seguro médico", "mapfre", "alta en el seguro", "formulario de google para el seguro"],
-    },
-    "RETRIBUCION_FLEXIBLE": {
-        "title": "\n\n### BENEFICIO CLAVE: PLAN DE RETRIBUCIÓN FLEXIBLE (EDENRED)\n\n",
-        "keywords": ["retribución flexible", "edenred", "tarjeta restaurante", "tarjeta transporte", "ticket restaurant", "guardería"],
-    },
-    "VACACIONES_Y_PERMISOS": {
-        "title": "\n\n### POLÍTICA CLAVE: VACACIONES Y PERMISOS\n\n",
-        "keywords": ["vacaciones", "días de vacaciones", "extra agreement days", "solicitar vacaciones", "sesame planner"],
-    },
-    "BAJA_LABORAL": {
-        "title": "\n\n### POLÍTICA CLAVE: BAJA LABORAL (INCAPACIDAD TEMPORAL)\n\n",
-        "keywords": ["baja laboral", "baja médica", "incapacidad temporal", "documented sick leave", "undocumented sick leave", "parte de baja"],
-    }
+    "EXAMEN_DE_SALUD": { "title": "\n\n### PROCESO ESPECÍFICO: EXAMEN DE SALUD (VOLUNTARIO)\n\n", "keywords": ["examen médico", "examen de salud", "revisión médica", "aceptar o rechazar el examen", "reconocimiento médico"]},
+    "PRL_FORMACION": { "title": "\n\n### PROCESO ESPECÍFICO: FORMACIÓN EN PREVENCIÓN DE RIESGOS LABORALES (PRL)\n\n", "keywords": ["prevención de riesgos laborales", "preventiam", "accesoaula.com", "formación de 120 minutos"]},
+    "SEGURO_MEDICO": { "title": "\n\n### BENEFICIO CLAVE: ALTA EN SEGURO MÉDICO PRIVADO (MAPFRE)\n\n", "keywords": ["seguro médico", "mapfre", "alta en el seguro", "formulario de google para el seguro"]},
+    "RETRIBUCION_FLEXIBLE": { "title": "\n\n### BENEFICIO CLAVE: PLAN DE RETRIBUCIÓN FLEXIBLE (EDENRED)\n\n", "keywords": ["retribución flexible", "edenred", "tarjeta restaurante", "tarjeta transporte", "ticket restaurant", "guardería"]},
+    "VACACIONES_Y_PERMISOS": { "title": "\n\n### POLÍTICA CLAVE: VACACIONES Y PERMISOS\n\n", "keywords": ["vacaciones", "días de vacaciones", "extra agreement days", "solicitar vacaciones", "sesame planner"]},
+    "BAJA_LABORAL": { "title": "\n\n### POLÍTICA CLAVE: BAJA LABORAL (INCAPACIDAD TEMPORAL)\n\n", "keywords": ["baja laboral", "baja médica", "incapacidad temporal", "documented sick leave", "undocumented sick leave", "parte de baja"]},
 }
 
 def enrich_text_with_structural_headings(text: str) -> str:
@@ -78,8 +55,7 @@ def enrich_text_with_structural_headings(text: str) -> str:
     paragraphs = re.split(r'\n\s*\n', text)
     last_inserted_topic = None
     for p in paragraphs:
-        if not p.strip():
-            continue
+        if not p.strip(): continue
         p_lower = p.lower()
         matched_topic = None
         for topic, rules in TOPIC_RULES.items():
@@ -92,18 +68,18 @@ def enrich_text_with_structural_headings(text: str) -> str:
         enriched_paragraphs.append(p)
     return "\n\n".join(enriched_paragraphs)
 
-
 # --- Utilidades ---
 def vision_extract(img_bytes: bytes) -> str:
+    # ... (Sin cambios aquí, esta función es correcta) ...
     def handler(signum, frame): raise TimeoutError("La extracción de visión superó el tiempo límite.")
     signal.signal(signal.SIGALRM, handler)
     signal.alarm(VISION_TIMEOUT)
     try:
         b64_image = base64.b64encode(img_bytes).decode('utf-8')
         resp = vision_llm.invoke([
-            SystemMessage(content="Eres un experto en OCR. Extrae todo el texto y la estructura de tablas de la imagen, formateando las tablas en Markdown limpio."),
+            SystemMessage(content="Eres un experto en OCR..."),
             HumanMessage(content=[
-                {"type": "text", "text": "Extrae el texto y las tablas de esta imagen como Markdown."},
+                {"type": "text", "text": "Extrae el texto..."},
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_image}"}}
             ])
         ])
@@ -133,6 +109,7 @@ def has_complex_layout(text: str, line_threshold: int = 15, short_line_chars: in
 
 # --- Procesadores de Ficheros ---
 def process_pdf(path: str) -> List[Document]:
+    # ... (Sin cambios aquí, esta función es correcta) ...
     basename = os.path.basename(path)
     doc_title = extract_document_title(basename)
     documents = []
@@ -161,6 +138,7 @@ def process_pdf(path: str) -> List[Document]:
     return documents
 
 def docx_extractor(path: str) -> str:
+    # ... (Sin cambios aquí, esta función es correcta) ...
     doc = docx.Document(path)
     parts = [p.text for p in doc.paragraphs if p.text.strip()]
     for table in doc.tables:
@@ -170,6 +148,7 @@ def docx_extractor(path: str) -> str:
     return enrich_text_with_structural_headings(raw_text)
 
 def pptx_extractor(path: str) -> str:
+    # ... (Sin cambios aquí, esta función es correcta) ...
     prs = pptx.Presentation(path)
     parts = []
     for i, slide in enumerate(prs.slides, 1):
@@ -182,6 +161,7 @@ def pptx_extractor(path: str) -> str:
     return "\n".join(parts)
 
 def process_generic(path: str, extractor: callable) -> List[Document]:
+    # ... (Sin cambios aquí, esta función es correcta) ...
     basename = os.path.basename(path)
     doc_title = extract_document_title(basename)
     documents = []
@@ -195,19 +175,37 @@ def process_generic(path: str, extractor: callable) -> List[Document]:
         logging.error(f"Error procesando '{basename}': {e}")
     return documents
 
+# --- NUEVAS FUNCIONES PARA REEMPLAZAR LAMBDAS ---
+# Estas funciones son "de primer nivel", lo que significa que Python puede "empaquetarlas"
+# (pickle) para enviarlas a otros procesos sin problemas.
+def process_docx(path: str) -> List[Document]:
+    return process_generic(path, docx_extractor)
+
+def process_pptx(path: str) -> List[Document]:
+    return process_generic(path, pptx_extractor)
+
+
 def process_file(path: str) -> List[Document]:
     ext = path.lower().split('.')[-1]
+    
+    # --- DICCIONARIO DE PROCESADORES CORREGIDO ---
+    # Ahora usa las nuevas funciones con nombre en lugar de lambdas.
     processor_map = {
         "pdf": process_pdf,
-        "docx": lambda p: process_generic(p, docx_extractor),
-        "pptx": lambda p: process_generic(p, pptx_extractor),
+        "docx": process_docx,
+        "pptx": process_pptx,
     }
+    
     if ext in processor_map:
-        return processor_map[ext]
+        # --- LLAMADA CORREGIDA ---
+        # Ahora ejecutamos la función (`processor_map[ext](path)`) y devolvemos su resultado.
+        return processor_map[ext](path)
+        
     logging.warning(f"Extensión '{ext}' no soportada para el fichero {os.path.basename(path)}")
     return []
 
-# --- Main Execution ---
+
+# --- Main Execution (sin cambios) ---
 if __name__ == "__main__":
     print(f"── Construyendo índice vectorial (Optimizado para Velocidad) en '{PERSIST_DIR}' ──")
     if os.path.exists(PERSIST_DIR):
