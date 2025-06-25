@@ -1,4 +1,4 @@
-# build_index.py (Versión v23 - Final Equilibrado y Eficiente)
+# build_index.py (Versión v24 - Con Enriquecimiento Estructural Automático)
 from __future__ import annotations
 import os
 import re
@@ -11,9 +11,7 @@ import logging
 import fitz  # PyMuPDF
 import pptx
 import docx
-import openpyxl
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from io import BytesIO
 from typing import List
 from tqdm import tqdm
 from dotenv import load_dotenv
@@ -32,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 VISION_MODEL = "gpt-4o"
 EMBEDDING_MODEL = "text-embedding-3-large"
 DOCS_FOLDER = "docs"
-PERSIST_DIR = "chroma_db_v2" # Directorio para la nueva BBDD
+PERSIST_DIR = "chroma_db_v2"
 VISION_TIMEOUT = 120
 MAX_WORKERS = min(os.cpu_count() or 4, 4)
 API_BASE = os.getenv("OPENAI_API_BASE", "https://genai-gateway.azure-api.net/")
@@ -43,7 +41,75 @@ vision_llm = ChatOpenAI(model=VISION_MODEL, openai_api_base=API_BASE, openai_api
 embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL, openai_api_base=API_BASE, openai_api_key=API_KEY, chunk_size=500)
 text_splitter = SemanticChunker(embedder, breakpoint_threshold_type="percentile")
 
-# --- Utilidades ---
+
+# ==============================================================================
+# === LÓGICA DE ENRIQUECIMIENTO ESTRUCTURAL (¡LA NUEVA INTELIGENCIA!) ===
+# ==============================================================================
+
+# Este diccionario define los "temas clave" que queremos que el bot distinga.
+# Es fácilmente ampliable con nuevos temas en el futuro.
+TOPIC_RULES = {
+    "EXAMEN_DE_SALUD": {
+        "title": "\n\n### PROCESO ESPECÍFICO: EXAMEN DE SALUD (VOLUNTARIO)\n\n",
+        "keywords": ["examen médico", "examen de salud", "revisión médica", "aceptar o rechazar el examen", "reconocimiento médico"],
+    },
+    "PRL_FORMACION": {
+        "title": "\n\n### PROCESO ESPECÍFICO: FORMACIÓN EN PREVENCIÓN DE RIESGOS LABORALES (PRL)\n\n",
+        "keywords": ["prevención de riesgos laborales", "preventiam", "accesoaula.com", "formación de 120 minutos"],
+    },
+    "SEGURO_MEDICO": {
+        "title": "\n\n### BENEFICIO CLAVE: ALTA EN SEGURO MÉDICO PRIVADO (MAPFRE)\n\n",
+        "keywords": ["seguro médico", "mapfre", "alta en el seguro", "formulario de google para el seguro"],
+    },
+    "RETRIBUCION_FLEXIBLE": {
+        "title": "\n\n### BENEFICIO CLAVE: PLAN DE RETRIBUCIÓN FLEXIBLE (EDENRED)\n\n",
+        "keywords": ["retribución flexible", "edenred", "tarjeta restaurante", "tarjeta transporte", "ticket restaurant", "guardería"],
+    },
+    "VACACIONES_Y_PERMISOS": {
+        "title": "\n\n### POLÍTICA CLAVE: VACACIONES Y PERMISOS\n\n",
+        "keywords": ["vacaciones", "días de vacaciones", "extra agreement days", "solicitar vacaciones", "sesame planner"],
+    },
+    "BAJA_LABORAL": {
+        "title": "\n\n### POLÍTICA CLAVE: BAJA LABORAL (INCAPACIDAD TEMPORAL)\n\n",
+        "keywords": ["baja laboral", "baja médica", "incapacidad temporal", "documented sick leave", "undocumented sick leave", "parte de baja"],
+    }
+}
+
+def enrich_text_with_structural_headings(text: str) -> str:
+    """
+    Analiza el texto y le inserta títulos descriptivos antes de párrafos clave
+    para mejorar la precisión del chunking y del retrieval.
+    """
+    enriched_paragraphs = []
+    # Usamos un separador más robusto que pueda manejar saltos de línea variados
+    paragraphs = re.split(r'\n\s*\n', text)
+    
+    last_inserted_topic = None
+
+    for p in paragraphs:
+        if not p.strip():
+            continue
+
+        p_lower = p.lower()
+        matched_topic = None
+
+        # Determinar si el párrafo actual pertenece a un tema clave
+        for topic, rules in TOPIC_RULES.items():
+            if any(kw in p_lower for kw in rules["keywords"]):
+                matched_topic = topic
+                break
+        
+        # Si encontramos un tema y es diferente al último que insertamos, añadimos el título
+        if matched_topic and matched_topic != last_inserted_topic:
+            enriched_paragraphs.append(rules["title"].strip())
+            last_inserted_topic = matched_topic
+        
+        enriched_paragraphs.append(p)
+
+    return "\n\n".join(enriched_paragraphs)
+
+
+# --- Utilidades (Sin cambios aquí, excepto la llamada a la nueva función) ---
 def vision_extract(img_bytes: bytes) -> str:
     def handler(signum, frame): raise TimeoutError("La extracción de visión superó el tiempo límite.")
     signal.signal(signal.SIGALRM, handler)
@@ -57,7 +123,8 @@ def vision_extract(img_bytes: bytes) -> str:
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_image}"}}
             ])
         ])
-        return resp.content.strip()
+        # Aplicamos el enriquecimiento también al texto extraído por OCR
+        return enrich_text_with_structural_headings(resp.content.strip())
     except Exception as e:
         logging.error(f"Error en la API de Visión: {e}")
         return ""
@@ -67,8 +134,7 @@ def vision_extract(img_bytes: bytes) -> str:
 def extract_document_title(basename: str) -> str:
     title = os.path.splitext(basename)[0]
     title = re.sub(r'[\W_]+', ' ', title)
-    title = re.sub(r'\s+', ' ', title).strip()
-    return title.title()
+    return re.sub(r'\s+', ' ', title).strip().title()
 
 def add_documents_to_vectorstore(docs: List[Document], vector_store: Chroma):
     if not docs: return
@@ -78,11 +144,11 @@ def add_documents_to_vectorstore(docs: List[Document], vector_store: Chroma):
 
 def has_complex_layout(text: str, line_threshold: int = 15, short_line_chars: int = 60) -> bool:
     lines = text.splitlines()
-    if not lines or len(lines) == 0: return False
-    avg_line_len = sum(len(line) for line in lines) / len(lines)
+    if not lines: return False
+    avg_line_len = sum(len(line) for line in lines) / len(lines) if len(lines) > 0 else 0
     return len(lines) > line_threshold and avg_line_len < short_line_chars
 
-# --- Procesadores de Ficheros ---
+# --- Procesadores de Ficheros (Modificados para usar el enriquecimiento) ---
 
 def process_pdf(path: str) -> List[Document]:
     basename = os.path.basename(path)
@@ -100,6 +166,7 @@ def process_pdf(path: str) -> List[Document]:
                 try:
                     pix = page.get_pixmap(dpi=200)
                     img_bytes = pix.tobytes("png")
+                    # La función vision_extract ya enriquece el texto internamente
                     vision_text = vision_extract(img_bytes)
                     if vision_text:
                         content = f"# Documento: {doc_title}\n## Página: {i}\n\n{vision_text}"
@@ -107,24 +174,12 @@ def process_pdf(path: str) -> List[Document]:
                 except Exception as e:
                     logging.warning(f"Error procesando página {i} con OCR: {e}")
             else:
-                content = f"# Documento: {doc_title}\n## Página: {i}\n\n{page_text}"
+                # ¡AQUÍ APLICAMOS EL ENRIQUECIMIENTO!
+                enriched_text = enrich_text_with_structural_headings(page_text)
+                content = f"# Documento: {doc_title}\n## Página: {i}\n\n{enriched_text}"
                 documents.append(Document(page_content=content, metadata=meta))
     except Exception as e:
         logging.error(f"Error crítico procesando PDF '{basename}': {e}")
-    return documents
-
-def process_generic(path: str, extractor: callable) -> List[Document]:
-    basename = os.path.basename(path)
-    doc_title = extract_document_title(basename)
-    documents = []
-    try:
-        full_text = extractor(path)
-        if full_text:
-            meta = {"source": basename, "title": doc_title}
-            content = f"# Documento: {doc_title}\n\n{full_text}"
-            documents.append(Document(page_content=content, metadata=meta))
-    except Exception as e:
-        logging.error(f"Error procesando '{basename}': {e}")
     return documents
 
 def docx_extractor(path: str) -> str:
@@ -133,17 +188,37 @@ def docx_extractor(path: str) -> str:
     for table in doc.tables:
         table_md = "\n".join([f"| {' | '.join(cell.text.strip() for cell in row.cells)} |" for row in table.rows])
         parts.append(f"\n--- TABLA ---\n{table_md}\n--- FIN TABLA ---\n")
-    return "\n\n".join(parts)
+    raw_text = "\n\n".join(parts)
+    # ¡AQUÍ APLICAMOS EL ENRIQUECIMIENTO!
+    return enrich_text_with_structural_headings(raw_text)
 
 def pptx_extractor(path: str) -> str:
     prs = pptx.Presentation(path)
     parts = []
     for i, slide in enumerate(prs.slides, 1):
-        parts.append(f"\n## Diapositiva {i}\n")
+        slide_texts = []
         for shape in slide.shapes:
             if hasattr(shape, "text") and shape.text.strip():
-                parts.append(shape.text)
+                slide_texts.append(shape.text)
+        # Enriquecemos el texto de cada diapositiva
+        enriched_slide_text = enrich_text_with_structural_headings("\n".join(slide_texts))
+        parts.append(f"\n## Diapositiva {i}\n{enriched_slide_text}")
     return "\n".join(parts)
+
+def process_generic(path: str, extractor: callable) -> List[Document]:
+    basename = os.path.basename(path)
+    doc_title = extract_document_title(basename)
+    documents = []
+    try:
+        # El enriquecimiento ahora está dentro de las funciones `_extractor`
+        full_text = extractor(path)
+        if full_text:
+            meta = {"source": basename, "title": doc_title}
+            content = f"# Documento: {doc_title}\n\n{full_text}"
+            documents.append(Document(page_content=content, metadata=meta))
+    except Exception as e:
+        logging.error(f"Error procesando '{basename}': {e}")
+    return documents
 
 def process_file(path: str) -> List[Document]:
     ext = path.lower().split('.')[-1]
@@ -157,9 +232,9 @@ def process_file(path: str) -> List[Document]:
     logging.warning(f"Extensión '{ext}' no soportada para el fichero {os.path.basename(path)}")
     return []
 
-# --- Main Execution ---
+# --- Main Execution (sin cambios) ---
 if __name__ == "__main__":
-    print(f"── Construyendo índice vectorial v23 (Final Equilibrado) en '{PERSIST_DIR}' ──")
+    print(f"── Construyendo índice vectorial v24 (Enriquecido Automáticamente) en '{PERSIST_DIR}' ──")
     if os.path.exists(PERSIST_DIR):
         print(f"Borrando el directorio de índice antiguo: {PERSIST_DIR}")
         shutil.rmtree(PERSIST_DIR)
@@ -169,7 +244,7 @@ if __name__ == "__main__":
     extensions = ("*.pdf", "*.pptx", "*.docx")
     files = [f for ext in extensions for f in glob.glob(os.path.join(DOCS_FOLDER, f"**/{ext}"), recursive=True)]
     
-    print(f"Se encontraron {len(files)} documentos. Procesando con enfoque híbrido...")
+    print(f"Se encontraron {len(files)} documentos. Procesando y enriqueciendo automáticamente...")
     total_chunks = 0
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as pool:
         futs = {pool.submit(process_file, fp): fp for fp in files}
@@ -184,4 +259,4 @@ if __name__ == "__main__":
                 logging.error(f"❌ Error crítico en el futuro del fichero {futs[fut]}: {e}", exc_info=True)
 
     print(f"\nSe generaron e indexaron un total de {total_chunks} chunks semánticos.")
-    print(f"✅ Índice vectorial creado con éxito y guardado en '{PERSIST_DIR}'.")
+    print(f"✅ Índice vectorial enriquecido creado con éxito y guardado en '{PERSIST_DIR}'.")
