@@ -1,5 +1,6 @@
+# cloudbuild.yaml (Versión Final y Automatizada)
 steps:
-# Paso 1: Sincronizar documentos desde el bucket al workspace.
+# Paso 1: Descargar los documentos fuente desde GCS.
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   id: pull-docs
   entrypoint: bash
@@ -9,16 +10,39 @@ steps:
       mkdir -p docs
       gsutil -m cp -r gs://hr-bot-docs/* docs/
 
-# Paso 2: Construir la imagen de Docker.
+# Paso 2: Instalar las dependencias de Python necesarias para el script de indexación.
+- name: 'python:3.11-slim'
+  id: install-dependencies
+  entrypoint: 'pip'
+  args: ['install', '-r', 'requirements.txt', '--user']
+  waitFor: ['pull-docs']
+
+# Paso 3: Ejecutar el script 'build_index.py' para crear la base de datos.
+# Este paso crea la carpeta 'chroma_db_v2' que se subirá a GCS.
+- name: 'python:3.11-slim'
+  id: build-vector-index
+  entrypoint: 'python'
+  args: ['build_index.py']
+  waitFor: ['install-dependencies']
+
+# Paso 4: Subir la base de datos recién creada a Google Cloud Storage.
+- name: 'gcr.io/cloud-builders/gsutil'
+  id: upload-db-to-gcs
+  args: ['-m', 'cp', '-r', 'chroma_db_v2', 'gs://${_GCS_BUCKET_NAME}/']
+  waitFor: ['build-vector-index']
+
+# Paso 5: Construir la imagen de la aplicación Docker.
 - name: 'gcr.io/cloud-builders/docker'
   id: docker-build
   args: ['build', '-t', 'gcr.io/$PROJECT_ID/hr-ciklum-agent', '.']
 
-# Paso 3: Empujar la imagen construida a Google Container Registry.
+# Paso 6: Subir la imagen construida a Google Container Registry.
 - name: 'gcr.io/cloud-builders/docker'
+  id: docker-push
   args: ['push', 'gcr.io/$PROJECT_ID/hr-ciklum-agent']
+  waitFor: ['docker-build']
 
-# Paso 4: Desplegar la nueva imagen a Cloud Run.
+# Paso 7: Desplegar la nueva revisión en Cloud Run.
 - name: 'gcr.io/cloud-builders/gcloud'
   id: run-deploy
   entrypoint: 'gcloud'
@@ -29,16 +53,16 @@ steps:
     - '--image=gcr.io/$PROJECT_ID/hr-ciklum-agent'
     - '--region=europe-west1'
     - '--platform=managed'
-    - '--memory=2Gi' # <-- CORRECCIÓN: Memoria aumentada
+    - '--memory=2Gi'
     - '--allow-unauthenticated'
-    - '--set-env-vars=OPENAI_API_BASE=${_OPENAI_API_BASE}'
+    - '--set-env-vars=OPENAI_API_BASE=${_OPENAI_API_BASE},GCS_BUCKET_NAME=${_GCS_BUCKET_NAME},PERSIST_DIRECTORY=chroma_db_v2'
     - '--set-secrets=OPENAI_API_KEY=hr-bot-openai-key:latest'
+  waitFor: ['docker-push', 'upload-db-to-gcs']
 
-# Variables de sustitución
 substitutions:
   _OPENAI_API_BASE: 'https://genai-gateway.azure-api.net/'
+  _GCS_BUCKET_NAME: 'hr-bot-docs' # Usa tu bucket de GCS aquí
 
-# Aumentamos el tiempo de espera por si la construcción del índice tarda.
 timeout: '1800s'
 options:
   logging: CLOUD_LOGGING_ONLY
