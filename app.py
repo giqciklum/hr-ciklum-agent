@@ -1,9 +1,12 @@
-# app.py (Versión Final v4 - Bilingüe y Contextual)
+# app.py (Versión Final v5 - Bilingüe, Contextual y con Prompt Dinámico desde Secret Manager)
 import os
 import logging
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from typing import List, Dict, Any
+
+# IMPORTACIÓN CLAVE PARA SECRET MANAGER
+from google.cloud import secretmanager
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.documents import Document
@@ -27,6 +30,9 @@ PERSIST_DIRECTORY = "chroma_db_v2"
 MODEL_NAME = "gpt-4o"
 EMBEDDING_MODEL_NAME = "text-embedding-3-large"
 
+# ID de tu proyecto de Google Cloud
+GCP_PROJECT_ID = "619993214373"
+
 if not API_KEY:
     logging.critical("FATAL: No se ha encontrado la 'OPENAI_API_KEY'.")
     exit()
@@ -37,28 +43,32 @@ chat_histories: Dict[str, Any] = {}
 # --- Prompt de Contextualización ---
 CONTEXTUALIZE_PROMPT_TEMPLATE = """Dada la siguiente conversación (chat_history) y la última pregunta del usuario (input), reformula la pregunta para que sea una pregunta independiente y clara que pueda entenderse sin el historial previo. No respondas a la pregunta, únicamente reformúlala."""
 
-# --- NUEVO PROMPT V7 CON REGLA DE IDIOMA ---
-RAG_PROMPT_V7 = """
-**TU ROL:** Eres HRCiklum, el asistente de IA y compañero de confianza para los empleados de Ciklum. Tu objetivo es proporcionar respuestas claras, fiables y prácticas, actuando como un miembro experto y servicial del equipo de RRHH.
+# --- NUEVA FUNCIÓN PARA OBTENER EL PROMPT DESDE SECRET MANAGER ---
+def get_hr_prompt() -> str:
+    """
+    Obtiene la última versión del prompt de HR desde Google Cloud Secret Manager.
+    Si falla, devuelve un prompt de emergencia para que la app no se caiga.
+    """
+    try:
+        secret_id = "hr-ciklum-prompt"
+        version_id = "latest"
+        name = f"projects/{GCP_PROJECT_ID}/secrets/{secret_id}/versions/{version_id}"
 
-**TUS PRINCIPIOS (INQUEBRANTABLES):**
-1.  **IDIOMA DE RESPUESTA (Regla Maestra):** Detecta el idioma principal de la **PREGUNTA DEL USUARIO** (español o inglés) y responde **siempre** en ese mismo idioma. Si la pregunta es en inglés, toda tu respuesta debe ser en inglés. Si es en español, toda tu respuesta debe ser en español.
-2.  **BASE EN LA EVIDENCIA (Regla de Oro):** Basa tus respuestas **única y exclusivamente** en la información del CONTEXTO proporcionado. **NUNCA INVENTES NADA.** Si un detalle no está en el contexto, no lo menciones.
-3.  **SÍNTESIS EXPERTA:** La pregunta del usuario puede ser compleja y la respuesta puede estar repartida en varios fragmentos del contexto. Tu tarea es **sintetizar toda la información relevante** en una única respuesta coherente y bien estructurada.
-4.  **RESPUESTAS PRÁCTICAS Y SERVICIALES:** Ve al grano. Usa listas, negritas y pasos a seguir para que el empleado sepa exactamente qué hacer. Anticipa la necesidad real: si preguntan por un "problema", responde con la "solución" que se encuentra en el contexto.
-5.  **DISCRIMINACIÓN PRECISA:** El contexto puede contener información sobre varios procesos similares (ej. formación de riesgos y examen de salud). Si el usuario pregunta específicamente por un proceso, **enfoca tu respuesta exclusivamente en ese proceso**. Ignora la información de otros procesos, aunque esté en el contexto, para evitar confusiones.
-6.  **GESTIÓN DE INCERTIDUMBRE (Protocolo Mejorado):**
-    * Si el CONTEXTO está vacío o claramente no es relevante para la pregunta, responde (en el idioma del usuario) con amabilidad: "He revisado la documentación interna, pero no he encontrado información específica sobre este tema. Para asegurar que recibes una respuesta precisa, lo mejor es que consultes directamente con el equipo de RRHH. ¡Están para ayudarte!" (En inglés: "I've reviewed the internal documentation, but I couldn't find specific information on this topic. To ensure you get an accurate answer, it's best to check directly with the HR team. They are there to help you!").
-    * Si el usuario pregunta sobre leyes externas o pide comparaciones no presentes en el contexto, explica tu función (en el idioma del usuario).
-7.  **TONO AMIGABLE Y PROFESIONAL:** Sé cercano y servicial, pero siempre preciso y fiable. Termina tus respuestas con una nota positiva o una frase de ayuda.
+        client = secretmanager.SecretManagerServiceClient()
+        response = client.access_secret_version(request={"name": name})
+        
+        prompt_text = response.payload.data.decode("UTF-8")
+        logging.info("✅ Prompt cargado exitosamente desde Secret Manager.")
+        return prompt_text
 
-**CONTEXTO (Información interna y verificada de Ciklum):**
-{context}
----
-**PREGUNTA DEL USUARIO (previamente analizada y contextualizada):**
-{input}
-**TU RESPUESTA (clara, precisa, servicial y EN EL MISMO IDIOMA que la pregunta del usuario):**
-"""
+    except Exception as e:
+        logging.error(f"❌ CRITICAL: No se pudo cargar el prompt desde Secret Manager. Usando prompt de emergencia. Error: {e}", exc_info=True)
+        # Este es un prompt de respaldo para que la app siga funcionando si Secret Manager falla
+        return """Eres un asistente de RRHH. Responde de forma profesional y muy breve a las preguntas del usuario.
+        Informa al usuario que estás operando en modo de contingencia.
+        Contexto: {context}
+        Pregunta: {input}
+        """
 
 # --- Arquitectura de la Cadena de IA ---
 final_chain = None
@@ -93,24 +103,25 @@ try:
     ])
     history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
 
+    # AQUÍ ESTÁ LA MAGIA: LLAMAMOS A LA FUNCIÓN PARA OBTENER EL PROMPT
     answer_generation_prompt = ChatPromptTemplate.from_messages([
-        # Usamos el nuevo prompt V7
-        ("system", RAG_PROMPT_V7),
+        ("system", get_hr_prompt()),
         MessagesPlaceholder(variable_name="chat_history"),
         ("human", "{input}"),
     ])
 
-    Youtube_chain = create_stuff_documents_chain(llm, answer_generation_prompt)
+    document_chain = create_stuff_documents_chain(llm, answer_generation_prompt)
 
     rag_chain = RunnablePassthrough.assign(
-        context=history_aware_retriever,
+        context=history_aware_retriever | format_docs
     ).assign(
-        answer=Youtube_chain,
+        answer=document_chain
     )
-
+    
+    # La salida final es solo la clave 'answer'
     final_chain = rag_chain | (lambda x: x['answer'])
     
-    logging.info("✅ Arquitectura de IA Experta (v4 - Bilingüe) inicializada correctamente.")
+    logging.info("✅ Arquitectura de IA Experta (v5 - Prompt Dinámico) inicializada correctamente.")
 
 except Exception as e:
     logging.critical(f"❌ FATAL: La cadena RAG no pudo inicializarse: {e}", exc_info=True)

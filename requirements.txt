@@ -30,3 +30,4 @@ google-cloud-storage
 google-auth
 tqdm
 langchain-experimental
+google-cloud-secret-manager
