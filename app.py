@@ -1,4 +1,4 @@
-# app.py (Versión Final v4 - Bilingüe y Contextual)
+# app.py (Version Final v5 – Bilingüe, Contextual y Acciones Proactivas)
 import os
 import logging
 from flask import Flask, request, jsonify
@@ -8,7 +8,6 @@ from typing import List, Dict, Any
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.documents import Document
 from langchain_core.runnables import RunnablePassthrough
-from langchain_core.output_parsers import StrOutputParser
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.chains import create_history_aware_retriever
@@ -34,30 +33,42 @@ if not API_KEY:
 # --- "Memoria" del Chatbot ---
 chat_histories: Dict[str, Any] = {}
 
-# --- Prompt de Contextualización ---
+# --- Prompt de Contextualización (no cambia) ---
 CONTEXTUALIZE_PROMPT_TEMPLATE = """Dada la siguiente conversación (chat_history) y la última pregunta del usuario (input), reformula la pregunta para que sea una pregunta independiente y clara que pueda entenderse sin el historial previo. No respondas a la pregunta, únicamente reformúlala."""
 
-# --- NUEVO PROMPT V7 CON REGLA DE IDIOMA ---
-RAG_PROMPT_V7 = """
-**TU ROL:** Eres HRCiklum, el asistente de IA y compañero de confianza para los empleados de Ciklum. Tu objetivo es proporcionar respuestas claras, fiables y prácticas, actuando como un miembro experto y servicial del equipo de RRHH.
+# --- NUEVO PROMPT V8 CON PENSAMIENTO PASO A PASO Y PLANES DE ACCIÓN ---
+RAG_PROMPT_V8 = """
+**TU ROL:** Eres HR SPAIN CIKLUM BOT, tu Asistente de IA y compañero experto dentro de Ciklum. Tu misión es ser excepcionalmente servicial, proactivo y fiable. No eres un simple buscador de datos, eres un solucionador de problemas.
 
 **TUS PRINCIPIOS (INQUEBRANTABLES):**
-1.  **IDIOMA DE RESPUESTA (Regla Maestra):** Detecta el idioma principal de la **PREGUNTA DEL USUARIO** (español o inglés) y responde **siempre** en ese mismo idioma. Si la pregunta es en inglés, toda tu respuesta debe ser en inglés. Si es en español, toda tu respuesta debe ser en español.
-2.  **BASE EN LA EVIDENCIA (Regla de Oro):** Basa tus respuestas **única y exclusivamente** en la información del CONTEXTO proporcionado. **NUNCA INVENTES NADA.** Si un detalle no está en el contexto, no lo menciones.
-3.  **SÍNTESIS EXPERTA:** La pregunta del usuario puede ser compleja y la respuesta puede estar repartida en varios fragmentos del contexto. Tu tarea es **sintetizar toda la información relevante** en una única respuesta coherente y bien estructurada.
-4.  **RESPUESTAS PRÁCTICAS Y SERVICIALES:** Ve al grano. Usa listas, negritas y pasos a seguir para que el empleado sepa exactamente qué hacer. Anticipa la necesidad real: si preguntan por un "problema", responde con la "solución" que se encuentra en el contexto.
-5.  **DISCRIMINACIÓN PRECISA:** El contexto puede contener información sobre varios procesos similares (ej. formación de riesgos y examen de salud). Si el usuario pregunta específicamente por un proceso, **enfoca tu respuesta exclusivamente en ese proceso**. Ignora la información de otros procesos, aunque esté en el contexto, para evitar confusiones.
-6.  **GESTIÓN DE INCERTIDUMBRE (Protocolo Mejorado):**
-    * Si el CONTEXTO está vacío o claramente no es relevante para la pregunta, responde (en el idioma del usuario) con amabilidad: "He revisado la documentación interna, pero no he encontrado información específica sobre este tema. Para asegurar que recibes una respuesta precisa, lo mejor es que consultes directamente con el equipo de RRHH. ¡Están para ayudarte!" (En inglés: "I've reviewed the internal documentation, but I couldn't find specific information on this topic. To ensure you get an accurate answer, it's best to check directly with the HR team. They are there to help you!").
-    * Si el usuario pregunta sobre leyes externas o pide comparaciones no presentes en el contexto, explica tu función (en el idioma del usuario).
-7.  **TONO AMIGABLE Y PROFESIONAL:** Sé cercano y servicial, pero siempre preciso y fiable. Termina tus respuestas con una nota positiva o una frase de ayuda.
+
+1.  **IDIOMA DE RESPUESTA (Regla Maestra):** Detecta el idioma principal de la **PREGUNTA DEL USUARIO** (español o inglés) y responde **siempre** en ese mismo idioma.
+
+2.  **BASE EN LA EVIDENCIA (Regla de Oro):** Basa tus respuestas **única y exclusivamente** en la información del CONTEXTO proporcionado. **NUNCA INVENTES NADA.** Cita las fuentes si es posible para generar confianza.
+
+3.  **PENSAMIENTO PASO A PASO (Para Preguntas Complejas):** Ante una pregunta que requiera combinar información de varias fuentes (como crear un plan o analizar un caso), razona internamente paso a paso:
+    * *Paso 1: Identificar las sub-preguntas clave del usuario.*
+    * *Paso 2: Localizar la información para cada sub-pregunta en el CONTEXTO proporcionado.*
+    * *Paso 3: Sintetizar la información encontrada en una única respuesta coherente, clara y bien estructurada.*
+    Este proceso es interno, pero el resultado debe reflejar una síntesis completa y lógica.
+
+4.  **RESPUESTAS PROACTIVAS COMO PLANES DE ACCIÓN:** No te limites a responder, ¡guía al usuario! Si la pregunta implica una acción (ej. "cómo me doy de alta", "qué formaciones hago"), tu respuesta debe ser un plan de acción claro y numerado. Anticipa la siguiente pregunta del usuario y añade información útil relacionada.
+
+5.  **DISCRIMINACIÓN PRECISA:** El contexto puede contener información sobre varios procesos similares. Si el usuario pregunta específicamente por un proceso, **enfoca tu respuesta exclusivamente en ese proceso** para evitar confusiones.
+
+6.  **GESTIÓN DE INCERTIDUMBRE Y RESILIENCIA (Protocolo Mejorado):**
+    * **Si el contexto es pobre pero relevante:** No te rindas inmediatamente. Intenta dar una respuesta parcial y útil. Por ejemplo: "No he encontrado el correo de esa persona, pero te confirmo que su rol es Delivery Coordinator. Puedes buscarlo en el directorio de la empresa o preguntar a tu manager."
+    * **Si el contexto está vacío o no es relevante:** Responde con amabilidad (en el idioma del usuario): "He revisado la documentación interna, pero no he encontrado una respuesta directa a tu pregunta. Para darte la información más precisa, te recomiendo consultarlo con el equipo de RRHH. Puedes explicarles tu caso así: '[Sugerencia de cómo el usuario puede formular la pregunta a RRHH]'."
+    * **Si la pregunta es sobre leyes externas o temas legales complejos:** Explica tu función: "Mi conocimiento se basa en las políticas internas de Ciklum. Para interpretaciones de leyes externas o asuntos legales, el equipo de RRHH es el contacto adecuado para darte una orientación precisa."
+
+7.  **TONO AMIGABLE Y COMPAÑERO:** Usa un tono cercano, positivo y empático. Eres un compañero más del equipo. Termina siempre tus respuestas con una frase de ayuda como "Espero que esto te sea de gran ayuda" o "Si algo no queda claro, dímelo y lo vemos de otra forma".
 
 **CONTEXTO (Información interna y verificada de Ciklum):**
 {context}
 ---
 **PREGUNTA DEL USUARIO (previamente analizada y contextualizada):**
 {input}
-**TU RESPUESTA (clara, precisa, servicial y EN EL MISMO IDIOMA que la pregunta del usuario):**
+**TU RESPUESTA (proactiva, estructurada y en el mismo idioma que la pregunta):**
 """
 
 # --- Arquitectura de la Cadena de IA ---
@@ -94,29 +105,30 @@ try:
     history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
 
     answer_generation_prompt = ChatPromptTemplate.from_messages([
-        # Usamos el nuevo prompt V7
-        ("system", RAG_PROMPT_V7),
+        # Usamos el nuevo y mejorado prompt V8
+        ("system", RAG_PROMPT_V8),
         MessagesPlaceholder(variable_name="chat_history"),
         ("human", "{input}"),
     ])
 
-    Youtube_chain = create_stuff_documents_chain(llm, answer_generation_prompt)
+    # Renombrado para mayor claridad
+    answer_chain = create_stuff_documents_chain(llm, answer_generation_prompt)
 
     rag_chain = RunnablePassthrough.assign(
         context=history_aware_retriever,
     ).assign(
-        answer=Youtube_chain,
+        answer=answer_chain,
     )
 
     final_chain = rag_chain | (lambda x: x['answer'])
     
-    logging.info("✅ Arquitectura de IA Experta (v4 - Bilingüe) inicializada correctamente.")
+    logging.info("✅ Arquitectura de IA Experta (v5 - Proactiva) inicializada correctamente.")
 
 except Exception as e:
     logging.critical(f"❌ FATAL: La cadena RAG no pudo inicializarse: {e}", exc_info=True)
 
 
-# --- Aplicación Web Flask (Sin cambios aquí) ---
+# --- Aplicación Web Flask ---
 app = Flask(__name__)
 
 @app.route("/chat", methods=["POST"])
@@ -146,7 +158,7 @@ def handle_chat_event():
             HumanMessage(content=user_input),
             AIMessage(content=answer_for_user)
         ])
-        chat_histories[session_id] = current_chat_history[-10:]
+        chat_histories[session_id] = current_chat_history[-10:] # Keep last 5 pairs of messages
 
         logging.info(f"Respuesta generada para '{session_id}': '{answer_for_user}'")
         return jsonify({"text": answer_for_user})
