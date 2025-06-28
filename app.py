@@ -1,4 +1,4 @@
-# app.py (Version Final v5 – Bilingüe, Contextual y Acciones Proactivas)
+# app.py (Version Final v6 – Bilingüe, Contextual y con Lógica de Acción Mejorada)
 import os
 import logging
 from flask import Flask, request, jsonify
@@ -33,24 +33,24 @@ if not API_KEY:
 # --- "Memoria" del Chatbot ---
 chat_histories: Dict[str, Any] = {}
 
-# --- Prompt de Contextualización (no cambia) ---
+# --- Prompt de Contextualización (sin cambios) ---
 CONTEXTUALIZE_PROMPT_TEMPLATE = """Dada la siguiente conversación (chat_history) y la última pregunta del usuario (input), reformula la pregunta para que sea una pregunta independiente y clara que pueda entenderse sin el historial previo. No respondas a la pregunta, únicamente reformúlala."""
 
-# --- NUEVO PROMPT V8 CON PENSAMIENTO PASO A PASO Y PLANES DE ACCIÓN ---
-RAG_PROMPT_V8 = """
+# --- PROMPT DEFINITIVO V8 (MODIFICADO) ---
+# Esta es la versión mejorada que no cita fuentes y tiene las reglas más claras.
+RAG_PROMPT_V8_MODIFICADO = """
 **TU ROL:** Eres HR SPAIN CIKLUM BOT, tu Asistente de IA y compañero experto dentro de Ciklum. Tu misión es ser excepcionalmente servicial, proactivo y fiable. No eres un simple buscador de datos, eres un solucionador de problemas.
 
 **TUS PRINCIPIOS (INQUEBRANTABLES):**
 
 1.  **IDIOMA DE RESPUESTA (Regla Maestra):** Detecta el idioma principal de la **PREGUNTA DEL USUARIO** (español o inglés) y responde **siempre** en ese mismo idioma.
 
-2.  **BASE EN LA EVIDENCIA (Regla de Oro):** Basa tus respuestas **única y exclusivamente** en la información del CONTEXTO proporcionado. **NUNCA INVENTES NADA.** Cita las fuentes si es posible para generar confianza.
+2.  **BASE EN LA EVIDENCIA (Regla de Oro):** Basa tus respuestas **única y exclusivamente** en la información del CONTEXTO proporcionado. **NUNCA INVENTES NADA.** Tu conocimiento se limita estrictamente a los documentos internos que te han sido facilitados; no menciones los nombres de los archivos fuente al usuario.
 
-3.  **PENSAMIENTO PASO A PASO (Para Preguntas Complejas):** Ante una pregunta que requiera combinar información de varias fuentes (como crear un plan o analizar un caso), razona internamente paso a paso:
+3.  **PENSAMIENTO PASO A PASO (Para Preguntas Complejas):** Ante una pregunta que requiera combinar información de varias fuentes, razona internamente paso a paso (no muestres este razonamiento al usuario):
     * *Paso 1: Identificar las sub-preguntas clave del usuario.*
     * *Paso 2: Localizar la información para cada sub-pregunta en el CONTEXTO proporcionado.*
     * *Paso 3: Sintetizar la información encontrada en una única respuesta coherente, clara y bien estructurada.*
-    Este proceso es interno, pero el resultado debe reflejar una síntesis completa y lógica.
 
 4.  **RESPUESTAS PROACTIVAS COMO PLANES DE ACCIÓN:** No te limites a responder, ¡guía al usuario! Si la pregunta implica una acción (ej. "cómo me doy de alta", "qué formaciones hago"), tu respuesta debe ser un plan de acción claro y numerado. Anticipa la siguiente pregunta del usuario y añade información útil relacionada.
 
@@ -105,13 +105,12 @@ try:
     history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
 
     answer_generation_prompt = ChatPromptTemplate.from_messages([
-        # Usamos el nuevo y mejorado prompt V8
-        ("system", RAG_PROMPT_V8),
+        # Usamos el prompt definitivo V8 Modificado
+        ("system", RAG_PROMPT_V8_MODIFICADO),
         MessagesPlaceholder(variable_name="chat_history"),
         ("human", "{input}"),
     ])
 
-    # Renombrado para mayor claridad
     answer_chain = create_stuff_documents_chain(llm, answer_generation_prompt)
 
     rag_chain = RunnablePassthrough.assign(
@@ -122,7 +121,7 @@ try:
 
     final_chain = rag_chain | (lambda x: x['answer'])
     
-    logging.info("✅ Arquitectura de IA Experta (v5 - Proactiva) inicializada correctamente.")
+    logging.info("✅ Arquitectura de IA Experta (v6 - Lógica Mejorada) inicializada correctamente.")
 
 except Exception as e:
     logging.critical(f"❌ FATAL: La cadena RAG no pudo inicializarse: {e}", exc_info=True)
