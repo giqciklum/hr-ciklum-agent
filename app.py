@@ -1,6 +1,7 @@
-# app.py (Version Final v6 – Bilingüe, Contextual y con Lógica de Acción Mejorada)
+# app.py (Version Final v7 – Formateado para Google Chat)
 import os
 import logging
+import re  # ➊ IMPORTADO: Módulo de expresiones regulares para la limpieza
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from typing import List, Dict, Any
@@ -36,9 +37,8 @@ chat_histories: Dict[str, Any] = {}
 # --- Prompt de Contextualización (sin cambios) ---
 CONTEXTUALIZE_PROMPT_TEMPLATE = """Dada la siguiente conversación (chat_history) y la última pregunta del usuario (input), reformula la pregunta para que sea una pregunta independiente y clara que pueda entenderse sin el historial previo. No respondas a la pregunta, únicamente reformúlala."""
 
-# --- PROMPT DEFINITIVO V8 (MODIFICADO) ---
-# Esta es la versión mejorada que no cita fuentes y tiene las reglas más claras.
-RAG_PROMPT_V8_MODIFICADO = """
+# --- PROMPT DEFINITIVO V9 (MODIFICADO PARA GOOGLE CHAT) ---
+RAG_PROMPT_V9_MODIFICADO = """
 **TU ROL:** Eres HR SPAIN CIKLUM BOT, tu Asistente de IA y compañero experto dentro de Ciklum. Tu misión es ser excepcionalmente servicial, proactivo y fiable. No eres un simple buscador de datos, eres un solucionador de problemas.
 
 **TUS PRINCIPIOS (INQUEBRANTABLES):**
@@ -62,6 +62,11 @@ RAG_PROMPT_V8_MODIFICADO = """
     * **Si la pregunta es sobre leyes externas o temas legales complejos:** Explica tu función: "Mi conocimiento se basa en las políticas internas de Ciklum. Para interpretaciones de leyes externas o asuntos legales, el equipo de RRHH es el contacto adecuado para darte una orientación precisa."
 
 7.  **TONO AMIGABLE Y COMPAÑERO:** Usa un tono cercano, positivo y empático. Eres un compañero más del equipo. Termina siempre tus respuestas con una frase de ayuda como "Espero que esto te sea de gran ayuda" o "Si algo no queda claro, dímelo y lo vemos de otra forma".
+
+8.  **FORMATO GOOGLE CHAT (OBLIGATORIO):**
+    * Usa *asteriscos simples* para la negrita (ej. *así*). NUNCA uses asteriscos dobles.
+    * Para los correos electrónicos, escríbelos directamente (ej. `nombre@empresa.com`). NUNCA uses el formato `[texto](mailto:...)`.
+    * Estructura la información con listas simples usando `1.`, `2.` o viñetas `•`.
 
 **CONTEXTO (Información interna y verificada de Ciklum):**
 {context}
@@ -105,8 +110,8 @@ try:
     history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
 
     answer_generation_prompt = ChatPromptTemplate.from_messages([
-        # Usamos el prompt definitivo V8 Modificado
-        ("system", RAG_PROMPT_V8_MODIFICADO),
+        # ➋ USANDO EL PROMPT MEJORADO PARA GOOGLE CHAT
+        ("system", RAG_PROMPT_V9_MODIFICADO),
         MessagesPlaceholder(variable_name="chat_history"),
         ("human", "{input}"),
     ])
@@ -120,8 +125,8 @@ try:
     )
 
     final_chain = rag_chain | (lambda x: x['answer'])
-    
-    logging.info("✅ Arquitectura de IA Experta (v6 - Lógica Mejorada) inicializada correctamente.")
+
+    logging.info("✅ Arquitectura de IA Experta (v7 - Google Chat) inicializada correctamente.")
 
 except Exception as e:
     logging.critical(f"❌ FATAL: La cadena RAG no pudo inicializarse: {e}", exc_info=True)
@@ -129,6 +134,18 @@ except Exception as e:
 
 # --- Aplicación Web Flask ---
 app = Flask(__name__)
+
+
+# ➌ AÑADIDA: Función de limpieza para garantizar el formato correcto
+def adapt_to_google_chat(text: str) -> str:
+    # Reemplaza **negrita** por *negrita*
+    text = re.sub(r'\*\*(.*?)\*\*', r'*\1*', text)
+    # Elimina los enlaces mailto: [texto](mailto:correo@ejemplo.com) -> correo@ejemplo.com
+    text = re.sub(r'\[.*?\]\(mailto:([^)\s]+)\)', r'\1', text)
+    # Elimina cualquier 'mailto:' que haya podido quedar suelto
+    text = text.replace("mailto:", "")
+    return text
+
 
 @app.route("/chat", methods=["POST"])
 def handle_chat_event():
@@ -143,21 +160,23 @@ def handle_chat_event():
         return jsonify({})
 
     logging.info(f"Consulta recibida de '{session_id}': '{user_input}'")
-    
+
     current_chat_history = chat_histories.get(session_id, [])
-    
+
     try:
         result = final_chain.invoke({
             "input": user_input,
             "chat_history": current_chat_history
         })
-        answer_for_user = result
+        
+        # ➍ APLICANDO LA LIMPIEZA a la respuesta final
+        answer_for_user = adapt_to_google_chat(result)
 
         current_chat_history.extend([
             HumanMessage(content=user_input),
             AIMessage(content=answer_for_user)
         ])
-        chat_histories[session_id] = current_chat_history[-10:] # Keep last 5 pairs of messages
+        chat_histories[session_id] = current_chat_history[-10:]  # Keep last 5 pairs of messages
 
         logging.info(f"Respuesta generada para '{session_id}': '{answer_for_user}'")
         return jsonify({"text": answer_for_user})
@@ -165,6 +184,7 @@ def handle_chat_event():
     except Exception as e:
         logging.error(f"Error procesando la solicitud RAG: {e}", exc_info=True)
         return jsonify({"text": "Lo siento, ha ocurrido un error al procesar tu solicitud."}), 500
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
