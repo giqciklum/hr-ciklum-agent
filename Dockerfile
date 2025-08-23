@@ -1,31 +1,29 @@
-# Dockerfile Final (v4 - Con Herramientas de Google Cloud)
-FROM python:3.11-slim
+# Dockerfile Final (v5 - keyrings + base estable)
+FROM python:3.11-slim-bookworm
 
-# Instalar dependencias del sistema, incluyendo las herramientas para GCS
-RUN apt-get update && apt-get install -y curl gnupg \
-    && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list \
-    && curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key --keyring /usr/share/keyrings/cloud.google.gpg add - \
-    && apt-get update && apt-get install -y \
-    google-cloud-cli \
-    poppler-utils \
-    python3-crcmod \
-    --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
+# Instalar dependencias del sistema (sin apt-key) + Cloud SDK
+RUN set -eux; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends \
+    ca-certificates curl gnupg poppler-utils python3-crcmod; \
+  install -d -m 0755 /etc/apt/keyrings; \
+  curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+    | gpg --dearmor -o /etc/apt/keyrings/cloud.google.gpg; \
+  echo "deb [signed-by=/etc/apt/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+    > /etc/apt/sources.list.d/google-cloud-sdk.list; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends google-cloud-cli; \
+  rm -rf /var/lib/apt/lists/*
 
-# Establecer el directorio de trabajo
+# Directorio de trabajo
 WORKDIR /app
 
-# Copiar el fichero de requisitos
+# Dependencias Python
 COPY requirements.txt .
-
-# Instalar las dependencias de Python
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar el código fuente y el entrypoint
+# Código + entrypoint
 COPY . .
-
-# Hacer ejecutable el script de inicio
 RUN chmod +x /app/entrypoint.sh
 
-# Usar el script de inicio para lanzar la aplicación
 ENTRYPOINT ["/app/entrypoint.sh"]
