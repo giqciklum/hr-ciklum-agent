@@ -27,7 +27,7 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Constantes y Modelos ---
-VISION_MODEL = "gpt-4o"
+VISION_MODEL = "gpt-5"
 EMBEDDING_MODEL = "text-embedding-3-large"
 DOCS_FOLDER = "docs"
 PERSIST_DIR = "chroma_db_v2"
