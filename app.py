@@ -24,7 +24,7 @@ load_dotenv()
 API_KEY = os.getenv("OPENAI_API_KEY")
 BASE_URL = os.getenv("OPENAI_API_BASE", "https://genai-gateway.azure-api.net/")
 PERSIST_DIRECTORY = "chroma_db_v2"
-MODEL_NAME = "gpt-5"
+MODEL_NAME = "gpt-4o"
 EMBEDDING_MODEL_NAME = "text-embedding-3-large"
 
 if not API_KEY:
