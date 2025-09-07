@@ -1,4 +1,4 @@
-# cloudbuild.yaml (Corrected Version)
+# cloudbuild.yaml (Cost-Optimized Version)
 steps:
 # Step 1: Download source documents from the GCS bucket.
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -8,7 +8,6 @@ steps:
     - '-c'
     - |
       mkdir -p docs
-      # Pulls from the source documents bucket (_GCS_BUCKET_NAME)
       gsutil -m cp -r gs://${_GCS_BUCKET_NAME}/* docs/
 
 # Step 2: Install Python dependencies.
@@ -25,17 +24,16 @@ steps:
   args: ['build_index.py']
   waitFor: ['install-dependencies']
 
-# Step 4: CORRECTED - Synchronize the new database with GCS.
-# This step now uses 'rsync -d' to delete old database files from the bucket.
+# Step 4: Synchronize the new database with GCS.
 - name: 'gcr.io/cloud-builders/gsutil'
   id: upload-db-to-gcs
   args:
     - '-m'
     - 'rsync'
-    - '-d'  # <- The key change: deletes files in destination that are not in source.
+    - '-d'
     - '-r'
-    - 'chroma_db_v2' # Source directory
-    - 'gs://${_GCS_DB_BUCKET_NAME}/chroma_db_v2' # Destination directory
+    - 'chroma_db_v2'
+    - 'gs://${_GCS_DB_BUCKET_NAME}/chroma_db_v2'
   waitFor: ['build-vector-index']
 
 # Step 5: Build the application's Docker image.
@@ -62,7 +60,8 @@ steps:
     - '--platform=managed'
     - '--memory=1Gi'
     - '--allow-unauthenticated'
-    - '--min-instances=0'
+    - '--min-instances=0' # MODIFIED FOR COST SAVINGS
+    - '--cpu-boost'       # ADDED TO SPEED UP COLD STARTS
     - '--set-env-vars=OPENAI_API_BASE=${_OPENAI_API_BASE},GCS_DB_BUCKET_NAME=${_GCS_DB_BUCKET_NAME},PERSIST_DIRECTORY=chroma_db_v2'
     - '--set-secrets=OPENAI_API_KEY=hr-bot-openai-key:latest'
   waitFor: ['docker-push', 'upload-db-to-gcs']
@@ -70,8 +69,8 @@ steps:
 # Substitutions for your environment variables.
 substitutions:
   _OPENAI_API_BASE: 'https://genai-gateway.azure-api.net/'
-  _GCS_BUCKET_NAME: 'hr-bot-docs' # Your SOURCE bucket with PDFs, DOCX, etc.
-  _GCS_DB_BUCKET_NAME: 'hr-bot-db' # Your bucket for the vector database.
+  _GCS_BUCKET_NAME: 'hr-bot-docs'
+  _GCS_DB_BUCKET_NAME: 'hr-bot-db'
 
 # Timeout for the entire build.
 timeout: '1800s'
