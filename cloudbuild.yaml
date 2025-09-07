@@ -62,7 +62,7 @@ steps:
     - '--platform=managed'
     - '--memory=1Gi'
     - '--allow-unauthenticated'
-    - '--min-instances=1'
+    - '--min-instances=0'
     - '--set-env-vars=OPENAI_API_BASE=${_OPENAI_API_BASE},GCS_DB_BUCKET_NAME=${_GCS_DB_BUCKET_NAME},PERSIST_DIRECTORY=chroma_db_v2'
     - '--set-secrets=OPENAI_API_KEY=hr-bot-openai-key:latest'
   waitFor: ['docker-push', 'upload-db-to-gcs']
