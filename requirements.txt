@@ -1,32 +1,14 @@
-#Web Framework & Environment
 flask
 gunicorn
-python-dotenv
-
-#LangChain & OpenAI Core
 langchain
-langchain-core
+langchain-google-genai
 langchain-community
-langchain-openai
-openai
-transformers
-sentencepiece
-tokenizers
-
-#Vector Store
 langchain-chroma
 chromadb
-
-#Document Processing
-PyMuPDF
-pdf2image
-Pillow
-python-pptx
-python-docx
-openpyxl
-
-#Google Cloud & Utilities
+google-generativeai
 google-cloud-storage
-google-auth
+pypdf
 tqdm
-langchain-experimental
+pillow
+sentence-transformers
+transformers

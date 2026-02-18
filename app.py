@@ -1,7 +1,7 @@
-# app.py (Version Final v7 – Formateado para Google Chat)
+# app.py (Version Final v8 – Migrated to Google Gemini)
 import os
 import logging
-import re  # ➊ IMPORTADO: Módulo de expresiones regulares para la limpieza
+import re
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from typing import List, Dict, Any
@@ -10,7 +10,8 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.documents import Document
 from langchain_core.runnables import RunnablePassthrough
 from langchain_chroma import Chroma
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.chains import create_history_aware_retriever
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.retrievers.multi_query import MultiQueryRetriever
@@ -21,14 +22,13 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 load_dotenv()
 
 # --- Constantes y Variables de Entorno ---
-API_KEY = os.getenv("OPENAI_API_KEY")
-BASE_URL = os.getenv("OPENAI_API_BASE", "https://genai-gateway.azure-api.net/")
-PERSIST_DIRECTORY = "chroma_db_v2"
-MODEL_NAME = "gpt-4o"
-EMBEDDING_MODEL_NAME = "text-embedding-3-large"
+API_KEY = os.getenv("GOOGLE_API_KEY")
+PERSIST_DIRECTORY = os.getenv("PERSIST_DIRECTORY", "chroma_db_v2")
+MODEL_NAME = "gemini-2.0-flash"
+EMBEDDING_MODEL_NAME = "models/gemini-embedding-001"
 
 if not API_KEY:
-    logging.critical("FATAL: No se ha encontrado la 'OPENAI_API_KEY'.")
+    logging.critical("FATAL: No se ha encontrado la 'GOOGLE_API_KEY'.")
     exit()
 
 # --- "Memoria" del Chatbot ---
@@ -79,15 +79,14 @@ RAG_PROMPT_V9_MODIFICADO = """
 # --- Arquitectura de la Cadena de IA ---
 final_chain = None
 try:
-    llm = ChatOpenAI(
-        model_name=MODEL_NAME,
+    llm = ChatGoogleGenerativeAI(
+        model=MODEL_NAME,
         temperature=0.0,
-        openai_api_base=BASE_URL,
-        openai_api_key=API_KEY,
-        max_tokens=800,
-        request_timeout=90
+        google_api_key=API_KEY,
+        max_output_tokens=800,
+        convert_system_message_to_human=True,
     )
-    embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL_NAME, openai_api_base=BASE_URL, openai_api_key=API_KEY)
+    embedder = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     vector_store = Chroma(persist_directory=PERSIST_DIRECTORY, embedding_function=embedder)
     logging.info(f"✅ Base de datos cargada con {vector_store._collection.count()} chunks.")
 
@@ -110,7 +109,6 @@ try:
     history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
 
     answer_generation_prompt = ChatPromptTemplate.from_messages([
-        # ➋ USANDO EL PROMPT MEJORADO PARA GOOGLE CHAT
         ("system", RAG_PROMPT_V9_MODIFICADO),
         MessagesPlaceholder(variable_name="chat_history"),
         ("human", "{input}"),
@@ -126,7 +124,7 @@ try:
 
     final_chain = rag_chain | (lambda x: x['answer'])
 
-    logging.info("✅ Arquitectura de IA Experta (v7 - Google Chat) inicializada correctamente.")
+    logging.info("✅ Arquitectura de IA Experta (v8 - Gemini + Google Chat) inicializada correctamente.")
 
 except Exception as e:
     logging.critical(f"❌ FATAL: La cadena RAG no pudo inicializarse: {e}", exc_info=True)
@@ -136,13 +134,9 @@ except Exception as e:
 app = Flask(__name__)
 
 
-# ➌ AÑADIDA: Función de limpieza para garantizar el formato correcto
 def adapt_to_google_chat(text: str) -> str:
-    # Reemplaza **negrita** por *negrita*
     text = re.sub(r'\*\*(.*?)\*\*', r'*\1*', text)
-    # Elimina los enlaces mailto: [texto](mailto:correo@ejemplo.com) -> correo@ejemplo.com
     text = re.sub(r'\[.*?\]\(mailto:([^)\s]+)\)', r'\1', text)
-    # Elimina cualquier 'mailto:' que haya podido quedar suelto
     text = text.replace("mailto:", "")
     return text
 
@@ -168,15 +162,14 @@ def handle_chat_event():
             "input": user_input,
             "chat_history": current_chat_history
         })
-        
-        # ➍ APLICANDO LA LIMPIEZA a la respuesta final
+
         answer_for_user = adapt_to_google_chat(result)
 
         current_chat_history.extend([
             HumanMessage(content=user_input),
             AIMessage(content=answer_for_user)
         ])
-        chat_histories[session_id] = current_chat_history[-10:]  # Keep last 5 pairs of messages
+        chat_histories[session_id] = current_chat_history[-10:]
 
         logging.info(f"Respuesta generada para '{session_id}': '{answer_for_user}'")
         return jsonify({"text": answer_for_user})

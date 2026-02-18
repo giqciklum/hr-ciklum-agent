@@ -1,4 +1,4 @@
-# build_index.py (Versión v24 - Con Enriquecimiento Estructural Automático)
+# build_index.py (Versión v25 - Migrated to Google Gemini)
 from __future__ import annotations
 import os
 import re
@@ -6,8 +6,8 @@ import glob
 import json
 import shutil
 import base64
-import signal
 import logging
+import time
 import fitz  # PyMuPDF
 import pptx
 import docx
@@ -16,38 +16,45 @@ from typing import List
 from tqdm import tqdm
 from dotenv import load_dotenv
 
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.schema.document import Document
 from langchain.schema.messages import HumanMessage, SystemMessage
 from langchain_chroma import Chroma
-from langchain_experimental.text_splitter import SemanticChunker
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 # --- Configuración Global y Logging ---
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Constantes y Modelos ---
-VISION_MODEL = "gpt-4o"
-EMBEDDING_MODEL = "text-embedding-3-large"
+VISION_MODEL = "gemini-2.0-flash"
+EMBEDDING_MODEL = "models/gemini-embedding-001"
 DOCS_FOLDER = "docs"
 PERSIST_DIR = "chroma_db_v2"
 VISION_TIMEOUT = 120
-MAX_WORKERS = min(os.cpu_count() or 4, 4)
-API_BASE = os.getenv("OPENAI_API_BASE", "https://genai-gateway.azure-api.net/")
-API_KEY = os.getenv("OPENAI_API_KEY")
+MAX_WORKERS = 1
+API_KEY = os.getenv("GOOGLE_API_KEY")
+
+if not API_KEY:
+    logging.critical("FATAL: No se ha encontrado la 'GOOGLE_API_KEY'.")
+    exit()
 
 # --- Modelos y Splitter ---
-vision_llm = ChatOpenAI(model=VISION_MODEL, openai_api_base=API_BASE, openai_api_key=API_KEY, max_tokens=4096, request_timeout=VISION_TIMEOUT)
-embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL, openai_api_base=API_BASE, openai_api_key=API_KEY, chunk_size=500)
-text_splitter = SemanticChunker(embedder, breakpoint_threshold_type="percentile")
+vision_llm = ChatGoogleGenerativeAI(
+    model=VISION_MODEL,
+    google_api_key=API_KEY,
+    max_output_tokens=4096,
+    convert_system_message_to_human=True,
+)
+embedder = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200, separators=["\n\n### ", "\n\n## ", "\n\n# ", "\n\n", "\n", " "])
 
 
 # ==============================================================================
-# === LÓGICA DE ENRIQUECIMIENTO ESTRUCTURAL (¡LA NUEVA INTELIGENCIA!) ===
+# === LÓGICA DE ENRIQUECIMIENTO ESTRUCTURAL ===
 # ==============================================================================
 
-# Este diccionario define los "temas clave" que queremos que el bot distinga.
-# Es fácilmente ampliable con nuevos temas en el futuro.
 TOPIC_RULES = {
     "EXAMEN_DE_SALUD": {
         "title": "\n\n### PROCESO ESPECÍFICO: EXAMEN DE SALUD (VOLUNTARIO)\n\n",
@@ -76,60 +83,44 @@ TOPIC_RULES = {
 }
 
 def enrich_text_with_structural_headings(text: str) -> str:
-    """
-    Analiza el texto y le inserta títulos descriptivos antes de párrafos clave
-    para mejorar la precisión del chunking y del retrieval.
-    """
     enriched_paragraphs = []
-    # Usamos un separador más robusto que pueda manejar saltos de línea variados
     paragraphs = re.split(r'\n\s*\n', text)
-    
     last_inserted_topic = None
 
     for p in paragraphs:
         if not p.strip():
             continue
-
         p_lower = p.lower()
         matched_topic = None
 
-        # Determinar si el párrafo actual pertenece a un tema clave
         for topic, rules in TOPIC_RULES.items():
             if any(kw in p_lower for kw in rules["keywords"]):
                 matched_topic = topic
                 break
-        
-        # Si encontramos un tema y es diferente al último que insertamos, añadimos el título
+
         if matched_topic and matched_topic != last_inserted_topic:
-            enriched_paragraphs.append(rules["title"].strip())
+            enriched_paragraphs.append(TOPIC_RULES[matched_topic]["title"].strip())
             last_inserted_topic = matched_topic
-        
+
         enriched_paragraphs.append(p)
 
     return "\n\n".join(enriched_paragraphs)
 
 
-# --- Utilidades (Sin cambios aquí, excepto la llamada a la nueva función) ---
+# --- Utilidades ---
 def vision_extract(img_bytes: bytes) -> str:
-    def handler(signum, frame): raise TimeoutError("La extracción de visión superó el tiempo límite.")
-    signal.signal(signal.SIGALRM, handler)
-    signal.alarm(VISION_TIMEOUT)
     try:
         b64_image = base64.b64encode(img_bytes).decode('utf-8')
         resp = vision_llm.invoke([
-            SystemMessage(content="Eres un experto en OCR. Extrae todo el texto y la estructura de tablas de la imagen, formateando las tablas en Markdown limpio. Mantén la estructura original lo mejor posible."),
             HumanMessage(content=[
-                {"type": "text", "text": "Extrae el texto y las tablas de esta imagen como Markdown."},
+                {"type": "text", "text": "Eres un experto en OCR. Extrae todo el texto y la estructura de tablas de esta imagen, formateando las tablas en Markdown limpio. Mantén la estructura original lo mejor posible."},
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_image}"}}
             ])
         ])
-        # Aplicamos el enriquecimiento también al texto extraído por OCR
         return enrich_text_with_structural_headings(resp.content.strip())
     except Exception as e:
         logging.error(f"Error en la API de Visión: {e}")
         return ""
-    finally:
-        signal.alarm(0)
 
 def extract_document_title(basename: str) -> str:
     title = os.path.splitext(basename)[0]
@@ -138,9 +129,21 @@ def extract_document_title(basename: str) -> str:
 
 def add_documents_to_vectorstore(docs: List[Document], vector_store: Chroma):
     if not docs: return
-    texts = [doc.page_content for doc in docs]
-    metadatas = [doc.metadata for doc in docs]
-    vector_store.add_texts(texts=texts, metadatas=metadatas)
+    batch_size = 5
+    for i in range(0, len(docs), batch_size):
+        batch = docs[i:i+batch_size]
+        texts = [doc.page_content for doc in batch]
+        metadatas = [doc.metadata for doc in batch]
+        try:
+            vector_store.add_texts(texts=texts, metadatas=metadatas)
+        except Exception as e:
+            logging.warning(f"Batch failed, retrying in 10s: {e}")
+            time.sleep(10)
+            try:
+                vector_store.add_texts(texts=texts, metadatas=metadatas)
+            except Exception as e2:
+                logging.error(f"Batch failed permanently: {e2}")
+        time.sleep(2)
 
 def has_complex_layout(text: str, line_threshold: int = 15, short_line_chars: int = 60) -> bool:
     lines = text.splitlines()
@@ -148,13 +151,13 @@ def has_complex_layout(text: str, line_threshold: int = 15, short_line_chars: in
     avg_line_len = sum(len(line) for line in lines) / len(lines) if len(lines) > 0 else 0
     return len(lines) > line_threshold and avg_line_len < short_line_chars
 
-# --- Procesadores de Ficheros (Modificados para usar el enriquecimiento) ---
+# --- Procesadores de Ficheros ---
 
 def process_pdf(path: str) -> List[Document]:
     basename = os.path.basename(path)
     doc_title = extract_document_title(basename)
     documents = []
-    
+
     try:
         doc = fitz.open(path)
         for i, page in enumerate(tqdm(doc, desc=f"PDF: {basename}", leave=False), 1):
@@ -166,7 +169,6 @@ def process_pdf(path: str) -> List[Document]:
                 try:
                     pix = page.get_pixmap(dpi=200)
                     img_bytes = pix.tobytes("png")
-                    # La función vision_extract ya enriquece el texto internamente
                     vision_text = vision_extract(img_bytes)
                     if vision_text:
                         content = f"# Documento: {doc_title}\n## Página: {i}\n\n{vision_text}"
@@ -174,7 +176,6 @@ def process_pdf(path: str) -> List[Document]:
                 except Exception as e:
                     logging.warning(f"Error procesando página {i} con OCR: {e}")
             else:
-                # ¡AQUÍ APLICAMOS EL ENRIQUECIMIENTO!
                 enriched_text = enrich_text_with_structural_headings(page_text)
                 content = f"# Documento: {doc_title}\n## Página: {i}\n\n{enriched_text}"
                 documents.append(Document(page_content=content, metadata=meta))
@@ -189,7 +190,6 @@ def docx_extractor(path: str) -> str:
         table_md = "\n".join([f"| {' | '.join(cell.text.strip() for cell in row.cells)} |" for row in table.rows])
         parts.append(f"\n--- TABLA ---\n{table_md}\n--- FIN TABLA ---\n")
     raw_text = "\n\n".join(parts)
-    # ¡AQUÍ APLICAMOS EL ENRIQUECIMIENTO!
     return enrich_text_with_structural_headings(raw_text)
 
 def pptx_extractor(path: str) -> str:
@@ -200,7 +200,6 @@ def pptx_extractor(path: str) -> str:
         for shape in slide.shapes:
             if hasattr(shape, "text") and shape.text.strip():
                 slide_texts.append(shape.text)
-        # Enriquecemos el texto de cada diapositiva
         enriched_slide_text = enrich_text_with_structural_headings("\n".join(slide_texts))
         parts.append(f"\n## Diapositiva {i}\n{enriched_slide_text}")
     return "\n".join(parts)
@@ -210,7 +209,6 @@ def process_generic(path: str, extractor: callable) -> List[Document]:
     doc_title = extract_document_title(basename)
     documents = []
     try:
-        # El enriquecimiento ahora está dentro de las funciones `_extractor`
         full_text = extractor(path)
         if full_text:
             meta = {"source": basename, "title": doc_title}
@@ -232,18 +230,18 @@ def process_file(path: str) -> List[Document]:
     logging.warning(f"Extensión '{ext}' no soportada para el fichero {os.path.basename(path)}")
     return []
 
-# --- Main Execution (sin cambios) ---
+# --- Main Execution ---
 if __name__ == "__main__":
-    print(f"── Construyendo índice vectorial v24 (Enriquecido Automáticamente) en '{PERSIST_DIR}' ──")
+    print(f"── Construyendo índice vectorial v25 (Gemini + Enriquecido) en '{PERSIST_DIR}' ──")
     if os.path.exists(PERSIST_DIR):
         print(f"Borrando el directorio de índice antiguo: {PERSIST_DIR}")
         shutil.rmtree(PERSIST_DIR)
-    
+
     db = Chroma(persist_directory=PERSIST_DIR, embedding_function=embedder)
-    
+
     extensions = ("*.pdf", "*.pptx", "*.docx")
     files = [f for ext in extensions for f in glob.glob(os.path.join(DOCS_FOLDER, f"**/{ext}"), recursive=True)]
-    
+
     print(f"Se encontraron {len(files)} documentos. Procesando y enriqueciendo automáticamente...")
     total_chunks = 0
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as pool:

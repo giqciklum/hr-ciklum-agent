@@ -1,7 +1,7 @@
-# Dockerfile Final (v5 - keyrings + base estable)
+# Dockerfile Final (v6 - Gemini + HuggingFace Embeddings)
 FROM python:3.11-slim-bookworm
 
-# Instalar dependencias del sistema (sin apt-key) + Cloud SDK
+# Install system dependencies + Cloud SDK
 RUN set -eux; \
   apt-get update; \
   apt-get install -y --no-install-recommends \
@@ -15,14 +15,16 @@ RUN set -eux; \
   apt-get install -y --no-install-recommends google-cloud-cli; \
   rm -rf /var/lib/apt/lists/*
 
-# Directorio de trabajo
 WORKDIR /app
 
-# Dependencias Python
+# Install CPU-only torch FIRST (avoids downloading 4GB GPU version)
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+# Then install remaining dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Código + entrypoint
+# Copy code + entrypoint
 COPY . .
 RUN chmod +x /app/entrypoint.sh
 
