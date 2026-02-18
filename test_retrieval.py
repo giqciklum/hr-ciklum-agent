@@ -11,8 +11,8 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 # Load environment variables
 load_dotenv()
-API_KEY = os.getenv("OPENAI_API_KEY")
-BASE_URL = "https://genai-gateway.azure-api.net/"
+API_KEY = os.getenv("YOUR_API_KEY")
+BASE_URL = "https://your-api-gateway-url/"
 PERSIST_DIRECTORY = "chroma_db"
 
 def test_retrieval(question: str):
@@ -21,7 +21,7 @@ def test_retrieval(question: str):
     most relevant documents for a given question.
     """
     if not API_KEY:
-        logging.error("OPENAI_API_KEY not found. Make sure your .env file is correct.")
+        logging.error("YOUR_API_KEY not found. Make sure your .env file is correct.")
         return
 
     logging.info("Loading existing vector database...")

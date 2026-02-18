@@ -1,7 +1,7 @@
 # HR Spain Ciklum Bot — AI-Agentic HR Assistant
 
 > **Ciklum AI Academy — Level 3 Engineering Capstone Project**
-> **Author:** Ghazanfar Iqbal Begum (giq@ciklum.com)
+> **Author:** Ghazanfar Iqbal Begum (GitHub: giqciklum)
 
 ## Project Overview
 

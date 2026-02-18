@@ -5,3 +5,4 @@ docs/
 .env
 chroma_db_v2/
 docs_backup/
+.env
