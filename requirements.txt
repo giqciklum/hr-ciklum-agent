@@ -14,5 +14,6 @@ sentence-transformers
 transformers
 PyMuPDF
 python-pptx
-langchain-experimental
+python-docx
+python-dotenv
 langchain-text-splitters
