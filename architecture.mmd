@@ -1,0 +1,78 @@
+graph TB
+    subgraph USER["User Layer"]
+        EMP["Ciklum Employee"] --> GCHAT["Google Chat<br>HR SPAIN CIKLUM BOT"]
+    end
+
+    subgraph CLOUDRUN["Google Cloud Run (europe-west1)"]
+        FLASK["Flask Web Server<br>POST /chat · Gunicorn"]
+        MEM["Conversation Memory<br>Per-user · 5 exchanges"]
+        FLASK --> MEM
+
+        subgraph RAG["RAG Chain (LangChain)"]
+            HR["History-Aware Retriever"]
+            MQR["Multi-Query Retriever<br>3 query variants"]
+            HF["HuggingFace Embeddings<br>all-MiniLM-L6-v2 · Local CPU"]
+            CHROMA["ChromaDB<br>445 chunks · 11 docs"]
+            PROMPT["System Prompt v9<br>CoT + Self-Reflection + Bilingual"]
+            GEMINI["Gemini 2.0 Flash<br>temp=0.0 · 800 tokens"]
+            ADAPT["Google Chat Adapter"]
+
+            HR --> MQR --> HF --> CHROMA
+            CHROMA -->|top-10 context| PROMPT
+            PROMPT --> GEMINI --> ADAPT
+        end
+
+        FLASK --> HR
+    end
+
+    subgraph DATA["Data Preparation Pipeline"]
+        GDRIVE["Google Drive<br>11 HR Documents"]
+        SYNCFN["Cloud Function<br>auto-sync"]
+        GCS1["GCS: gs://hr-bot-docs"]
+
+        GDRIVE --> SYNCFN --> GCS1
+
+        subgraph BUILD["build_index.py v24"]
+            PDF["PDF Processor<br>PyMuPDF"]
+            PPTX["PPTX Processor"]
+            DOCX["DOCX Processor"]
+            LAYOUT{"Layout Detector"}
+            VISION["Vision OCR<br>Gemini 2.0 Flash"]
+            ENRICH["Structural Enrichment<br>6 topic rules"]
+            SPLIT["Text Splitter<br>chunk=1500 overlap=200"]
+            HFB["HuggingFace Embeddings"]
+
+            PDF --> LAYOUT
+            LAYOUT -->|complex| VISION --> ENRICH
+            LAYOUT -->|simple| ENRICH
+            PPTX --> ENRICH
+            DOCX --> ENRICH
+            ENRICH --> SPLIT --> HFB
+        end
+    end
+
+    subgraph CICD["CI/CD · Cloud Build"]
+        GH["GitHub<br>master branch"]
+        S1["1. pull-docs"]
+        S2["2. build-index"]
+        S3["3. upload-db"]
+        S4["4. docker-build"]
+        S5["5. docker-push"]
+        S6["6. run-deploy"]
+        GH --> S1 --> S2 --> S3 --> S4 --> S5 --> S6
+    end
+
+    subgraph SECRETS["Secret Manager"]
+        KEY["hr-bot-gemini-key"]
+    end
+
+    GCS2["GCS: gs://hr-bot-db"]
+
+    GCHAT -->|POST /chat| FLASK
+    ADAPT -->|JSON response| GCHAT
+    HFB --> GCS2
+    GCS2 -->|entrypoint.sh| CHROMA
+    GCS1 --> S1
+    S6 -->|deploys| FLASK
+    KEY -.->|injected| GEMINI
+    KEY -.->|injected| VISION
