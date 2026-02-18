@@ -18,8 +18,8 @@ from dotenv import load_dotenv
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain.schema.document import Document
-from langchain.schema.messages import HumanMessage, SystemMessage
+from langchain_core.documents import Document
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_chroma import Chroma
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
