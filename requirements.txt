@@ -12,3 +12,4 @@ tqdm
 pillow
 sentence-transformers
 transformers
+PyMuPDF
