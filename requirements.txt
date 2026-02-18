@@ -13,3 +13,6 @@ pillow
 sentence-transformers
 transformers
 PyMuPDF
+python-pptx
+langchain-experimental
+langchain-text-splitters
