@@ -12,9 +12,9 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_chroma import Chroma
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain.chains.history_aware_retriever import create_history_aware_retriever
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.retrievers.multi_query import MultiQueryRetriever
+from langchain_classic.chains import create_history_aware_retriever
+from langchain_classic.chains.combine_documents import create_stuff_documents_chain
+from langchain_classic.retrievers.multi_query import MultiQueryRetriever
 from langchain_core.messages import HumanMessage, AIMessage
 
 # --- Configuración Inicial ---
