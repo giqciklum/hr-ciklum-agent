@@ -82,9 +82,10 @@ try:
     llm = ChatGoogleGenerativeAI(
         model=MODEL_NAME,
         temperature=0.0,
-        google_api_key=API_KEY,
+        api_key=API_KEY,
         max_output_tokens=800,
-        convert_system_message_to_human=True,
+        timeout=60,
+        max_retries=2,
     )
     embedder = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     vector_store = Chroma(persist_directory=PERSIST_DIRECTORY, embedding_function=embedder)
@@ -158,10 +159,12 @@ def handle_chat_event():
     current_chat_history = chat_histories.get(session_id, [])
 
     try:
+        logging.info(f"Invocando cadena RAG para '{session_id}'...")
         result = final_chain.invoke({
             "input": user_input,
             "chat_history": current_chat_history
         })
+        logging.info(f"Cadena RAG completada para '{session_id}'.")
 
         answer_for_user = adapt_to_google_chat(result)
 
@@ -174,8 +177,11 @@ def handle_chat_event():
         logging.info(f"Respuesta generada para '{session_id}': '{answer_for_user}'")
         return jsonify({"text": answer_for_user})
 
+    except TimeoutError as e:
+        logging.error(f"TIMEOUT al procesar solicitud de '{session_id}': {e}", exc_info=True)
+        return jsonify({"text": "Lo siento, la solicitud ha tardado demasiado. Por favor, inténtalo de nuevo."}), 504
     except Exception as e:
-        logging.error(f"Error procesando la solicitud RAG: {e}", exc_info=True)
+        logging.error(f"Error procesando la solicitud RAG de '{session_id}': {type(e).__name__}: {e}", exc_info=True)
         return jsonify({"text": "Lo siento, ha ocurrido un error al procesar tu solicitud."}), 500
 
 
