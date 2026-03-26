@@ -149,7 +149,7 @@ def handle_chat_event():
 
     data = request.json
     user_input = data.get('message', {}).get('text', '').strip()
-    session_id = data.get('user', {}).get('id', 'default_session')
+    session_id = data.get('message', {}).get('sender', {}).get('name', 'default_session')
 
     if not user_input or data.get('user', {}).get('type') == 'BOT':
         return jsonify({})
