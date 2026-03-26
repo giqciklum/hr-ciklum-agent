@@ -40,6 +40,7 @@ steps:
   id: docker-build
   args: ['build', '-t', 'gcr.io/$PROJECT_ID/hr-ciklum-agent', '.']
 
+  waitFor: ['build-vector-index']
 # Step 5: Push the Docker image to Google Container Registry.
 - name: 'gcr.io/cloud-builders/docker'
   id: docker-push
@@ -61,7 +62,7 @@ steps:
     - '--allow-unauthenticated'
     - '--min-instances=0'
     - '--cpu-boost'
-    - '--set-env-vars=GCS_DB_BUCKET_NAME=${_GCS_DB_BUCKET_NAME},PERSIST_DIRECTORY=chroma_db_v2'
+    - '--set-env-vars=PERSIST_DIRECTORY=chroma_db_v2'
     - '--set-secrets=GOOGLE_API_KEY=hr-bot-gemini-key:latest'
   waitFor: ['docker-push', 'upload-db-to-gcs']
 
