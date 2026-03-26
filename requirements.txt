@@ -17,4 +17,5 @@ PyMuPDF
 python-pptx
 python-docx
 python-dotenv
-langchain-text-splitterslangchain-huggingface
+langchain-text-splitters
+langchain-huggingface
